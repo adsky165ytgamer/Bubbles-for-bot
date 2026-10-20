@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Bubble Manager</string>
+    <string name="channel_name">Bubble Multitasking Service</string>
+    <string name="channel_desc">Active floating bubble multitasking overlay</string>
+    <string name="notification_title">Bubble Multitasking Active</string>
+    <string name="notification_text">Floating overlay control is running</string>
+</resources>
