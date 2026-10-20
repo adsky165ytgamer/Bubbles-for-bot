@@ -2,6 +2,7 @@ package com.multitask.bubble.core
 
 import kotlin.system.exitProcess
 
+/** Runs inside the Shizuku shell process (UID 2000). */
 class ShellService : IShellService.Stub() {
 
     override fun destroy() {
@@ -10,11 +11,12 @@ class ShellService : IShellService.Stub() {
 
     override fun exec(command: String): String {
         return try {
-            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
-            val out = p.inputStream.bufferedReader().readText()
-            val err = p.errorStream.bufferedReader().readText()
-            p.waitFor()
-            if (err.isNotBlank()) "$out\n[err] $err" else out
+            val process = ProcessBuilder("sh", "-c", command)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            output
         } catch (e: Exception) {
             "[exception] ${e.message}"
         }

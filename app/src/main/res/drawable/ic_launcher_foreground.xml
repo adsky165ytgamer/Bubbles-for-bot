@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/ic_launcher_bubble"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Big bubble -->
+    <path
+        android:fillColor="#F4FBFA"
+        android:pathData="M48,58m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0" />
+    <!-- Small bubble -->
+    <path
+        android:fillColor="#6FF7F6"
+        android:pathData="M70,38m-9,0a9,9 0,1 1,18 0a9,9 0,1 1,-18 0" />
+</vector>

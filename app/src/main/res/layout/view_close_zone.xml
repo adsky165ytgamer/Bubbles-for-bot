@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="80dp"
+    android:layout_height="80dp"
+    android:contentDescription="@string/cd_close_zone">
+
+    <FrameLayout
+        android:id="@+id/close_bg"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:layout_gravity="center"
+        android:background="@drawable/bg_close_zone"
+        android:elevation="6dp">
+
+        <ImageView
+            android:id="@+id/close_icon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_gravity="center"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_close" />
+    </FrameLayout>
+</FrameLayout>

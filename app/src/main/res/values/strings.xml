@@ -1,7 +1,46 @@
 <resources>
     <string name="app_name">Bubble Manager</string>
-    <string name="channel_name">Bubble Multitasking Service</string>
-    <string name="channel_desc">Active floating bubble multitasking overlay</string>
-    <string name="notification_title">Bubble Multitasking Active</string>
-    <string name="notification_text">Floating overlay control is running</string>
+    <string name="tagline">Run any app as a floating bubble.</string>
+
+    <string name="section_status">Status</string>
+    <string name="status_shizuku">Shizuku</string>
+    <string name="status_shizuku_off">Not running. Start Shizuku, then come back.</string>
+    <string name="status_shizuku_no_permission">Running. Permission not granted yet.</string>
+    <string name="status_shizuku_ready">Running and authorized</string>
+    <string name="status_overlay">Draw over other apps</string>
+    <string name="status_overlay_off">Not allowed. Tap to open settings.</string>
+    <string name="status_overlay_on">Allowed</string>
+    <string name="status_service">Bubble service</string>
+    <string name="status_service_off">Stopped</string>
+    <string name="status_service_on">Running</string>
+
+    <string name="section_bubbles">Bubbles</string>
+    <string name="action_start">Start service</string>
+    <string name="action_stop">Stop service</string>
+    <string name="action_add">Add app</string>
+    <string name="hint_limit">Up to %1$d bubbles at once. Adding more replaces the oldest.</string>
+
+    <string name="section_diag">Diagnostics</string>
+    <string name="diag_copy">Copy</string>
+    <string name="diag_clear">Clear</string>
+    <string name="diag_empty">No activity yet.</string>
+    <string name="diag_copied">Copied to clipboard</string>
+
+    <string name="toast_overlay_needed">Allow “Draw over other apps”, then try again</string>
+    <string name="toast_shizuku_off">Shizuku is not running</string>
+    <string name="toast_shizuku_denied">Shizuku permission was denied</string>
+    <string name="toast_added">Added %1$s</string>
+
+    <string name="picker_title">Choose an app</string>
+    <string name="picker_search">Search apps</string>
+    <string name="recents_title">Recent bubbles</string>
+
+    <string name="notif_channel">Bubble service</string>
+    <string name="notif_title">Bubbles are active</string>
+    <string name="notif_text">Tap to open Bubble Manager</string>
+    <string name="notif_stop">Stop</string>
+
+    <string name="cd_bubble">Bubble for %1$s</string>
+    <string name="cd_recents">Recent bubbles</string>
+    <string name="cd_close_zone">Drop here to close</string>
 </resources>

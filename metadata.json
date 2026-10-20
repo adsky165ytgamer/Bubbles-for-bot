@@ -1,6 +1,6 @@
 {
   "name": "Bubble Manager",
-  "description": "Universal floating bubble multitasking environment with Shizuku-elevated freeform window launching and persistent overlay controls.",
+  "description": "Run any app as a floating bubble on Android 10+. Floating overlay icons with Shizuku-powered freeform windows.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

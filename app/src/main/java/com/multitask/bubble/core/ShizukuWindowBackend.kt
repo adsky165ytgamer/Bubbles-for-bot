@@ -6,109 +6,129 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Rect
 import android.os.IBinder
-import android.util.Log
 import rikka.shizuku.Shizuku
 
 class ShizukuWindowBackend(private val context: Context) : WindowBackend {
 
     companion object {
         const val TAG = "ShizukuBackend"
-        const val REQ = 1001
-        const val FREEFORM = 5
+        private const val REQUEST_CODE = 1001
+        private const val WINDOWING_MODE_FREEFORM = 5
+        private const val TASK_POLL_ATTEMPTS = 8
+        private const val TASK_POLL_DELAY_MS = 250L
+        private const val LOG_OUTPUT_LIMIT = 300
     }
 
+    @Volatile
     private var shell: IShellService? = null
-    private var pendingConnected: (() -> Unit)? = null
-    val logHistory = StringBuilder()
 
+    @Volatile
+    private var freeformConfigured = false
+
+    private val waiting = mutableListOf<() -> Unit>()
+
+    // Bump version() whenever ShellService changes, or Shizuku keeps running the old process.
     private val userServiceArgs = Shizuku.UserServiceArgs(
         ComponentName(context.packageName, ShellService::class.java.name)
-    ).daemon(false).processNameSuffix("shell").debuggable(false).version(1)
+    ).daemon(false).processNameSuffix("shell").debuggable(false).version(2)
 
-    private val conn = object : ServiceConnection {
+    private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            Log.d(TAG, "UserService connected")
-            recordLog("UserService connected to shell daemon")
             shell = IShellService.Stub.asInterface(binder)
-            pendingConnected?.invoke()
-            pendingConnected = null
+            DiagLog.log(TAG, "Shell service connected")
+            val callbacks = synchronized(waiting) { waiting.toList().also { waiting.clear() } }
+            callbacks.forEach { it() }
         }
-        override fun onServiceDisconnected(name: ComponentName?) {
-            Log.d(TAG, "UserService disconnected")
-            recordLog("UserService disconnected")
-            shell = null
-        }
-    }
 
-    private fun recordLog(msg: String) {
-        synchronized(logHistory) {
-            val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-            logHistory.append("[$ts] $msg\n")
-            if (logHistory.length > 4000) {
-                logHistory.delete(0, 1500)
-            }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            shell = null
+            freeformConfigured = false
+            DiagLog.log(TAG, "Shell service disconnected")
         }
     }
 
     override fun isReady(): Boolean = try {
         Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-    } catch (e: Exception) { false }
+    } catch (e: Exception) {
+        false
+    }
 
     override fun requestPermission(onResult: (Boolean) -> Unit) {
-        if (!Shizuku.pingBinder()) { onResult(false); return }
-        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) { onResult(true); return }
-        val l = object : Shizuku.OnRequestPermissionResultListener {
+        if (!Shizuku.pingBinder()) {
+            onResult(false)
+            return
+        }
+        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            onResult(true)
+            return
+        }
+        val listener = object : Shizuku.OnRequestPermissionResultListener {
             override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
-                if (requestCode != REQ) return
+                if (requestCode != REQUEST_CODE) return
                 Shizuku.removeRequestPermissionResultListener(this)
                 val granted = grantResult == PackageManager.PERMISSION_GRANTED
-                recordLog("Permission request result: $granted")
+                DiagLog.log(TAG, "Shizuku permission ${if (granted) "granted" else "denied"}")
                 onResult(granted)
             }
         }
-        Shizuku.addRequestPermissionResultListener(l)
-        Shizuku.requestPermission(REQ)
+        Shizuku.addRequestPermissionResultListener(listener)
+        Shizuku.requestPermission(REQUEST_CODE)
     }
 
     override fun connect(onConnected: () -> Unit) {
-        if (shell != null) { onConnected(); return }
-        pendingConnected = onConnected
-        recordLog("Binding UserService for ${context.packageName}")
-        Shizuku.bindUserService(userServiceArgs, conn)
+        if (shell != null) {
+            onConnected()
+            return
+        }
+        if (!isReady()) {
+            DiagLog.log(TAG, "Cannot connect: Shizuku is not running or not authorized")
+            return
+        }
+        val firstWaiter = synchronized(waiting) {
+            waiting.add(onConnected)
+            waiting.size == 1
+        }
+        if (firstWaiter) {
+            DiagLog.log(TAG, "Binding shell service")
+            Shizuku.bindUserService(userServiceArgs, connection)
+        }
     }
 
-    fun sh(cmd: String): String {
-        val s = shell ?: run {
-            val fallback = "[no shell connected - check Shizuku authorization]"
-            recordLog("$cmd -> $fallback")
-            Log.w(TAG, "$cmd -> $fallback")
-            return fallback
-        }
-        val out = try { s.exec(cmd) } catch (e: Exception) { "[remote error] ${e.message}" }
-        Log.d(TAG, "$cmd -> $out")
-        recordLog("$cmd -> $out")
-        return out
+    override fun disconnect() {
+        if (shell == null) return
+        runCatching { Shizuku.unbindUserService(userServiceArgs, connection, true) }
+        shell = null
+        freeformConfigured = false
     }
 
     override fun setupFreeform() {
-        recordLog("Enabling freeform support in global settings")
+        if (freeformConfigured) return
         sh("settings put global enable_freeform_support 1")
         sh("settings put global force_resizable_activities 1")
+        freeformConfigured = true
     }
 
     override fun launch(packageName: String, bounds: Rect): Int {
-        val comp = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?.component?.flattenToShortString() ?: run {
-            recordLog("No launch component found for $packageName")
+        val component = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?.component?.flattenToShortString()
+        if (component == null) {
+            DiagLog.log(TAG, "No launcher activity found for $packageName")
             return -1
         }
-        recordLog("Launching: am start -n $comp --windowingMode $FREEFORM")
-        val startOutput = sh("am start -n $comp --windowingMode $FREEFORM")
-        recordLog("am start output: $startOutput")
-        Thread.sleep(400) // let the task appear
-        val taskId = findTaskId(packageName)
-        recordLog("Found taskId for $packageName: $taskId")
-        if (taskId > 0) moveTask(taskId, bounds)
+        sh("am start -n $component --windowingMode $WINDOWING_MODE_FREEFORM")
+
+        var taskId = -1
+        for (attempt in 0 until TASK_POLL_ATTEMPTS) {
+            taskId = findTaskId(packageName)
+            if (taskId > 0) break
+            Thread.sleep(TASK_POLL_DELAY_MS)
+        }
+        if (taskId > 0) {
+            DiagLog.log(TAG, "$packageName is task $taskId")
+            moveTask(taskId, bounds)
+        } else {
+            DiagLog.log(TAG, "Could not find a task for $packageName, so it cannot be moved")
+        }
         return taskId
     }
 
@@ -117,18 +137,30 @@ class ShizukuWindowBackend(private val context: Context) : WindowBackend {
     }
 
     override fun close(packageName: String) {
-        recordLog("Closing $packageName via force-stop")
         sh("am force-stop $packageName")
     }
 
-    fun findTaskId(pkg: String): Int {
-        val dump = sh("dumpsys activity recents")
-        val re = Regex("""Task\{[^ ]+ #(\d+)[^}]*A=\d+:${Regex.escape(pkg)}""")
-        val found = re.find(dump)?.groupValues?.get(1)?.toIntOrNull()
-        if (found != null) return found
+    private fun findTaskId(packageName: String): Int {
+        val dump = sh("dumpsys activity recents", quiet = true)
+        val pattern = Regex("""Task\{\S+ #(\d+)[^}]*?A=(?:\d+:)?${Regex.escape(packageName)}\b""")
+        return pattern.find(dump)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+    }
 
-        // Secondary fallback regex for different Android OEM dumpsys formats
-        val fallbackRe = Regex("""#(\d+)\s+.*${Regex.escape(pkg)}""")
-        return fallbackRe.find(dump)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+    private fun sh(command: String, quiet: Boolean = false): String {
+        val service = shell
+        if (service == null) {
+            DiagLog.log(TAG, "$command -> no shell connected")
+            return ""
+        }
+        val output = try {
+            service.exec(command)
+        } catch (e: Exception) {
+            "[remote error] ${e.message}"
+        }
+        if (!quiet) {
+            val trimmed = output.trim().take(LOG_OUTPUT_LIMIT)
+            DiagLog.log(TAG, if (trimmed.isEmpty()) command else "$command -> $trimmed")
+        }
+        return output
     }
 }
