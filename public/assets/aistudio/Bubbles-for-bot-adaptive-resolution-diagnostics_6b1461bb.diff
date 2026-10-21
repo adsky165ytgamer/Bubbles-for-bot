@@ -1,0 +1,249 @@
+[1mdiff --git a/app/src/main/java/com/multitask/bubble/core/ShizukuWindowBackend.kt b/app/src/main/java/com/multitask/bubble/core/ShizukuWindowBackend.kt[m
+[1mindex b7d645d..5fbfcd0 100644[m
+[1m--- a/app/src/main/java/com/multitask/bubble/core/ShizukuWindowBackend.kt[m
+[1m+++ b/app/src/main/java/com/multitask/bubble/core/ShizukuWindowBackend.kt[m
+[36m@@ -174,6 +174,35 @@[m [mclass ShizukuWindowBackend(private val context: Context) : WindowBackend {[m
+         sh("am force-stop $packageName")[m
+     }[m
+ [m
+[32m+[m[32m    override fun dumpDiagnostics(packageName: String, displayId: Int): String {[m
+[32m+[m[32m        val activityDump = sh("dumpsys activity activities", quiet = true)[m
+[32m+[m[32m        val displayDump = sh("dumpsys display", quiet = true)[m
+[32m+[m[32m        val activityLines = activityDump.lineSequence()[m
+[32m+[m[32m            .filter { line ->[m
+[32m+[m[32m                line.contains(packageName) ||[m
+[32m+[m[32m                    line.contains("topResumedActivity") ||[m
+[32m+[m[32m                    line.contains("mResumedActivity") ||[m
+[32m+[m[32m                    line.contains("displayId=")[m
+[32m+[m[32m            }[m
+[32m+[m[32m            .take(40)[m
+[32m+[m[32m            .joinToString("\n")[m
+[32m+[m[32m        val displayLines = displayDump.lineSequence()[m
+[32m+[m[32m            .filter { line ->[m
+[32m+[m[32m                line.contains("DisplayDeviceInfo") ||[m
+[32m+[m[32m                    line.contains("mDisplayId=$displayId") ||[m
+[32m+[m[32m                    line.contains("displayId=$displayId")[m
+[32m+[m[32m            }[m
+[32m+[m[32m            .take(20)[m
+[32m+[m[32m            .joinToString("\n")[m
+[32m+[m[32m        return buildString {[m
+[32m+[m[32m            appendLine("task/display dump for package=$packageName requestedDisplay=$displayId")[m
+[32m+[m[32m            appendLine("activity-manager:")[m
+[32m+[m[32m            appendLine(if (activityLines.isBlank()) "no matching activity/task lines" else activityLines)[m
+[32m+[m[32m            appendLine("display-manager:")[m
+[32m+[m[32m            append(if (displayLines.isBlank()) "no matching display lines" else displayLines)[m
+[32m+[m[32m        }[m
+[32m+[m[32m    }[m
+[32m+[m
+     private fun findTaskId(packageName: String): Int {[m
+         val dump = sh("dumpsys activity recents", quiet = true)[m
+         val pattern = Regex("""Task\{\S+ #(\d+)[^}]*?A=(?:\d+:)?${Regex.escape(packageName)}\b""")[m
+[1mdiff --git a/app/src/main/java/com/multitask/bubble/core/WindowBackend.kt b/app/src/main/java/com/multitask/bubble/core/WindowBackend.kt[m
+[1mindex ae3a27e..a59d0a4 100644[m
+[1m--- a/app/src/main/java/com/multitask/bubble/core/WindowBackend.kt[m
+[1m+++ b/app/src/main/java/com/multitask/bubble/core/WindowBackend.kt[m
+[36m@@ -35,4 +35,7 @@[m [minterface WindowBackend {[m
+ [m
+     /** Blocking. Force-stops the app. */[m
+     fun close(packageName: String)[m
+[32m+[m
+[32m+[m[32m    /** Returns a concise task/display dump for black-screen diagnostics. */[m
+[32m+[m[32m    fun dumpDiagnostics(packageName: String, displayId: Int): String = "backend diagnostics unavailable"[m
+ }[m
+[1mdiff --git a/app/src/main/java/com/multitask/bubble/ui/EmbeddedWindow.kt b/app/src/main/java/com/multitask/bubble/ui/EmbeddedWindow.kt[m
+[1mindex d62cdca..85b14c6 100644[m
+[1m--- a/app/src/main/java/com/multitask/bubble/ui/EmbeddedWindow.kt[m
+[1m+++ b/app/src/main/java/com/multitask/bubble/ui/EmbeddedWindow.kt[m
+[36m@@ -51,7 +51,7 @@[m [mclass EmbeddedWindow([m
+     private val onFailed: () -> Unit,[m
+     private val onFocus: () -> Unit,[m
+     private val onDragEnd: (centerX: Int, centerY: Int) -> Unit[m
+[31m-) : BubbleWindow, SurfaceHolder.Callback {[m
+[32m+[m[32m) : BubbleWindow, SurfaceHolder.Callback2 {[m
+ [m
+     private companion object {[m
+         const val TAG = "EmbeddedWindow"[m
+[36m@@ -64,6 +64,7 @@[m [mclass EmbeddedWindow([m
+         const val ENTER_MS = 220L[m
+         const val EXIT_MS = 150L[m
+         const val MOVE_MS = 280L[m
+[32m+[m[32m        const val MANIPULATION_BUFFER_SCALE = 0.75f[m
+     }[m
+ [m
+     private val ui = Handler(Looper.getMainLooper())[m
+[36m@@ -83,6 +84,8 @@[m [mclass EmbeddedWindow([m
+     private var downTime = 0L[m
+     private var released = false[m
+     private var failed = false[m
+[32m+[m[32m    private var adaptiveBufferActive = false[m
+[32m+[m[32m    private var hardwareBufferReady = false[m
+     private var enterAnimator: ValueAnimator? = null[m
+     private var moveAnimator: ValueAnimator? = null[m
+ [m
+[36m@@ -154,6 +157,17 @@[m [mclass EmbeddedWindow([m
+         }[m
+     }[m
+ [m
+[32m+[m[32m    /** Captures current task/display/surface state in logcat for black-screen debugging. */[m
+[32m+[m[32m    fun dumpDiagnostics() {[m
+[32m+[m[32m        DiagnosticsDump.dump([m
+[32m+[m[32m            backend = backend,[m
+[32m+[m[32m            packageName = pkg,[m
+[32m+[m[32m            displayId = displayId,[m
+[32m+[m[32m            surface = root?.findViewById(R.id.surface),[m
+[32m+[m[32m            hardwareBufferReady = hardwareBufferReady[m
+[32m+[m[32m        )[m
+[32m+[m[32m    }[m
+[32m+[m
+     // ---- window[m
+ [m
+     private fun attach(animated: Boolean) {[m
+[36m@@ -259,6 +273,7 @@[m [mclass EmbeddedWindow([m
+ [m
+     override fun surfaceCreated(holder: SurfaceHolder) {[m
+         activeHolder = holder[m
+[32m+[m[32m        hardwareBufferReady = false[m
+         val existing = virtualDisplay[m
+         if (existing != null) {[m
+             existing.surface = holder.surface[m
+[36m@@ -290,12 +305,22 @@[m [mclass EmbeddedWindow([m
+         }[m
+     }[m
+ [m
+[31m-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit[m
+[32m+[m[32m    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {[m
+[32m+[m[32m        DiagLog.log(TAG, "$pkg surface changed ${width}x$height valid=${holder.surface.isValid}")[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    override fun surfaceRedrawNeeded(holder: SurfaceHolder) {[m
+[32m+[m[32m        if (!hardwareBufferReady) {[m
+[32m+[m[32m            hardwareBufferReady = true[m
+[32m+[m[32m            DiagLog.log(TAG, "$pkg surface redraw received; hardware buffer path is active")[m
+[32m+[m[32m        }[m
+[32m+[m[32m    }[m
+ [m
+     override fun surfaceDestroyed(holder: SurfaceHolder) {[m
+         // An old window can be destroyed after a new one took over, so only react to the active one.[m
+         if (holder === activeHolder) {[m
+             activeHolder = null[m
+[32m+[m[32m            hardwareBufferReady = false[m
+             virtualDisplay?.surface = null[m
+         }[m
+     }[m
+[36m@@ -356,6 +381,7 @@[m [mclass EmbeddedWindow([m
+                     val dx = (event.rawX - downX).toInt()[m
+                     val dy = (event.rawY - downY).toInt()[m
+                     if (moved || abs(dx) > slop || abs(dy) > slop) {[m
+[32m+[m[32m                        if (!moved) beginAdaptiveBuffer()[m
+                         moved = true[m
+                         params.x = startX + dx[m
+                         params.y = startY + dy[m
+[36m@@ -364,10 +390,11 @@[m [mclass EmbeddedWindow([m
+                     }[m
+                     true[m
+                 }[m
+[31m-                MotionEvent.ACTION_UP -> {[m
+[31m-                    if (moved) {[m
+[32m+[m[32m                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {[m
+[32m+[m[32m                    if (moved) endAdaptiveBuffer()[m
+[32m+[m[32m                    if (event.actionMasked == MotionEvent.ACTION_UP && moved) {[m
+                         onDragEnd(params.x + surfaceWidth / 2, params.y + (surfaceHeight + dp(TITLE_DP)) / 2)[m
+[31m-                    } else {[m
+[32m+[m[32m                    } else if (event.actionMasked == MotionEvent.ACTION_UP) {[m
+                         onFocus()[m
+                     }[m
+                     true[m
+[36m@@ -392,6 +419,7 @@[m [mclass EmbeddedWindow([m
+                     initialWidth = surfaceWidth[m
+                     initialHeight = surfaceHeight[m
+                     resizing = true[m
+[32m+[m[32m                    beginAdaptiveBuffer()[m
+                     moveAnimator?.cancel()[m
+                     handle.alpha = 1.0f[m
+                     handle.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)[m
+[36m@@ -418,7 +446,6 @@[m [mclass EmbeddedWindow([m
+                                 width = newW[m
+                                 height = newH[m
+                             }[m
+[31m-                            virtualDisplay?.resize(newW, newH, metrics.densityDpi)[m
+                             runCatching { wm.updateViewLayout(window, params) }[m
+                         }[m
+                     }[m
+[36m@@ -428,6 +455,7 @@[m [mclass EmbeddedWindow([m
+                     if (resizing) {[m
+                         resizing = false[m
+                         handle.alpha = 0.75f[m
+[32m+[m[32m                        endAdaptiveBuffer()[m
+                         virtualDisplay?.resize(surfaceWidth, surfaceHeight, metrics.densityDpi)[m
+                         runCatching { wm.updateViewLayout(window, params) }[m
+                         DiagLog.log(TAG, "$pkg resized to ${surfaceWidth}x${surfaceHeight}")[m
+[36m@@ -438,4 +466,28 @@[m [mclass EmbeddedWindow([m
+             }[m
+         }[m
+     }[m
+[32m+[m
+[32m+[m[32m    /** Uses a smaller SurfaceView buffer while manipulating the outer window. */[m
+[32m+[m[32m    private fun beginAdaptiveBuffer() {[m
+[32m+[m[32m        if (adaptiveBufferActive) return[m
+[32m+[m[32m        val surface = root?.findViewById<SurfaceView>(R.id.surface) ?: return[m
+[32m+[m[32m        val holder = activeHolder ?: surface.holder[m
+[32m+[m[32m        val width = surface.width.takeIf { it > 0 } ?: surfaceWidth[m
+[32m+[m[32m        val height = surface.height.takeIf { it > 0 } ?: surfaceHeight[m
+[32m+[m[32m        holder.setFixedSize([m
+[32m+[m[32m            (width * MANIPULATION_BUFFER_SCALE).toInt().coerceAtLeast(1),[m
+[32m+[m[32m            (height * MANIPULATION_BUFFER_SCALE).toInt().coerceAtLeast(1)[m
+[32m+[m[32m        )[m
+[32m+[m[32m        adaptiveBufferActive = true[m
+[32m+[m[32m        DiagLog.log(TAG, "$pkg adaptive buffer enabled at ${width}x$height -> " +[m
+[32m+[m[32m            "${(width * MANIPULATION_BUFFER_SCALE).toInt()}x${(height * MANIPULATION_BUFFER_SCALE).toInt()}")[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    /** Restores the native buffer after the gesture and lets the final resize settle once. */[m
+[32m+[m[32m    private fun endAdaptiveBuffer() {[m
+[32m+[m[32m        if (!adaptiveBufferActive) return[m
+[32m+[m[32m        activeHolder?.setSizeFromLayout()[m
+[32m+[m[32m        adaptiveBufferActive = false[m
+[32m+[m[32m        DiagLog.log(TAG, "$pkg adaptive buffer restored to layout size ${surfaceWidth}x$surfaceHeight")[m
+[32m+[m[32m    }[m
+ }[m
+[1mdiff --git a/app/src/main/java/com/multitask/bubble/ui/DiagnosticsDump.kt b/app/src/main/java/com/multitask/bubble/ui/DiagnosticsDump.kt[m
+[1mnew file mode 100644[m
+[1mindex 0000000..4f28637[m
+[1m--- /dev/null[m
+[1m+++ b/app/src/main/java/com/multitask/bubble/ui/DiagnosticsDump.kt[m
+[36m@@ -0,0 +1,35 @@[m
+[32m+[m[32mpackage com.multitask.bubble.ui[m
+[32m+[m
+[32m+[m[32mimport android.view.SurfaceView[m
+[32m+[m[32mimport com.multitask.bubble.core.DiagLog[m
+[32m+[m[32mimport com.multitask.bubble.core.WindowBackend[m
+[32m+[m
+[32m+[m[32m/**[m
+[32m+[m[32m * Collects the small set of state needed to diagnose apps that render black on a virtual display.[m
+[32m+[m[32m * The privileged task/display portion is supplied by [WindowBackend], while surface state is local.[m
+[32m+[m[32m */[m
+[32m+[m[32mobject DiagnosticsDump {[m
+[32m+[m[32m    private const val TAG = "BubbleDiagnostics"[m
+[32m+[m
+[32m+[m[32m    fun dump([m
+[32m+[m[32m        backend: WindowBackend,[m
+[32m+[m[32m        packageName: String,[m
+[32m+[m[32m        displayId: Int,[m
+[32m+[m[32m        surface: SurfaceView?,[m
+[32m+[m[32m        hardwareBufferReady: Boolean[m
+[32m+[m[32m    ) {[m
+[32m+[m[32m        val localState = buildString {[m
+[32m+[m[32m            appendLine("package=$packageName")[m
+[32m+[m[32m            appendLine("displayId=$displayId")[m
+[32m+[m[32m            appendLine("surfacePresent=${surface != null}")[m
+[32m+[m[32m            appendLine("surfaceValid=${surface?.holder?.surface?.isValid == true}")[m
+[32m+[m[32m            appendLine("surfaceSize=${surface?.width ?: 0}x${surface?.height ?: 0}")[m
+[32m+[m[32m            appendLine("hardwareBufferReady=$hardwareBufferReady")[m
+[32m+[m[32m        }[m
+[32m+[m[32m        val privilegedState = runCatching {[m
+[32m+[m[32m            backend.dumpDiagnostics(packageName, displayId)[m
+[32m+[m[32m        }.getOrElse { "backend diagnostics failed: ${it.message}" }[m
+[32m+[m
+[32m+[m[32m        DiagLog.log(TAG, "Diagnostics dump:\n$localState$privilegedState")[m
+[32m+[m[32m    }[m
+[32m+[m[32m}[m

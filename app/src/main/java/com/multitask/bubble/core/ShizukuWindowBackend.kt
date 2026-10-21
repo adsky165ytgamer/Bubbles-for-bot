@@ -174,6 +174,35 @@ class ShizukuWindowBackend(private val context: Context) : WindowBackend {
         sh("am force-stop $packageName")
     }
 
+    override fun dumpDiagnostics(packageName: String, displayId: Int): String {
+        val activityDump = sh("dumpsys activity activities", quiet = true)
+        val displayDump = sh("dumpsys display", quiet = true)
+        val activityLines = activityDump.lineSequence()
+            .filter { line ->
+                line.contains(packageName) ||
+                    line.contains("topResumedActivity") ||
+                    line.contains("mResumedActivity") ||
+                    line.contains("displayId=")
+            }
+            .take(40)
+            .joinToString("\n")
+        val displayLines = displayDump.lineSequence()
+            .filter { line ->
+                line.contains("DisplayDeviceInfo") ||
+                    line.contains("mDisplayId=$displayId") ||
+                    line.contains("displayId=$displayId")
+            }
+            .take(20)
+            .joinToString("\n")
+        return buildString {
+            appendLine("task/display dump for package=$packageName requestedDisplay=$displayId")
+            appendLine("activity-manager:")
+            appendLine(if (activityLines.isBlank()) "no matching activity/task lines" else activityLines)
+            appendLine("display-manager:")
+            append(if (displayLines.isBlank()) "no matching display lines" else displayLines)
+        }
+    }
+
     private fun findTaskId(packageName: String): Int {
         val dump = sh("dumpsys activity recents", quiet = true)
         val pattern = Regex("""Task\{\S+ #(\d+)[^}]*?A=(?:\d+:)?${Regex.escape(packageName)}\b""")

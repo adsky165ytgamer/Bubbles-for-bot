@@ -50,6 +50,15 @@ Bubble Manager employs a dual-mode windowing architecture with automatic capabil
   - **Double-tap to zoom**.
   - **Smooth inertial flings & continuous scrolling**.
   - **Hardware Back navigation** (`KEYCODE_BACK`).
+- **Adaptive Buffer Scaling (Jank Prevention)**: To prevent GPU memory bandwidth saturation and surface tearing on budget devices (e.g., Redmi A2) during fast dragging and window resizing:
+  - While a resize or drag gesture is active, `EmbeddedWindow` drops the internal `SurfaceView` buffer to **75% scale** (`holder.setFixedSize(width * 0.75, height * 0.75)`).
+  - Heavy `VirtualDisplay.resize()` IPC calls are deferred until the gesture completes.
+  - Upon finger lift or cancel (`ACTION_UP`/`ACTION_CANCEL`), `holder.setSizeFromLayout()` restores the native 1:1 buffer and the virtual display commits its final dimensions once.
+- **Surface Redraw Validation**: Implements `SurfaceHolder.Callback2` with `surfaceRedrawNeeded()` to monitor when the hardware-buffer composition pipeline becomes active.
+- **Black-Screen Diagnostics (`DiagnosticsDump`)**: Comprehensive state inspector combining local `SurfaceView` metrics with privileged Shizuku `dumpsys activity activities` and `dumpsys display` logs. Accessible via the in-app **Dump** button or adb command:
+  ```bash
+  adb shell am startservice -a com.multitask.bubble.DIAGNOSTICS com.multitask.bubble/.service.BubbleOverlayService
+  ```
 - **True Minimization**: Minimizing detaches the surface while keeping the app alive in memory. Tapping the bubble reattaches the surface immediately.
 - **Clean Dismissal**: Dropping a bubble onto the bottom "X" drop target triggers `am force-stop` via Shizuku, terminating the package processes and releasing the virtual display.
 
@@ -64,13 +73,15 @@ Bubble Manager employs a dual-mode windowing architecture with automatic capabil
 | Feature | Status | Implementation Details |
 | :--- | :---: | :--- |
 | **VirtualDisplay Embedding** | **Verified** | Private virtual displays created via `DisplayManager`, rendering into overlay `SurfaceView`. |
+| **Adaptive Buffer Scaling** | **Verified** | 75% internal buffer during drag/resize; deferred `VirtualDisplay.resize()`; native restoration via `setSizeFromLayout()`. |
+| **SurfaceRedraw Diagnostics** | **Verified** | `SurfaceHolder.Callback2` tracking hardware buffer readiness and surface validity. |
 | **Movable App Drawer Chip** | **Verified** | Draggable grid chip (`__chip__`) movable freely anywhere on screen; coordinates persisted across restarts via `bubble_positions` SharedPreferences. |
-| **Corner Window Resizing** | **Verified** | Touch-sensitive corner handle (`@+id/resize_handle`) tied directly to `VirtualDisplay.resize()` and dynamic layout updates. |
+| **Corner Window Resizing** | **Verified** | Touch-sensitive corner handle (`@+id/resize_handle`) tied to adaptive buffer scaling and dynamic layout updates. |
 | **Multi-Pointer Touch Injection** | **Verified** | `IShellService.injectTouch` forwards full multi-touch coordinate arrays to target display ID via privileged `IInputManager` reflection. |
 | **Arrange & Auto-Tiling Mode** | **Verified** | Long-press the grid chip to trigger haptic feedback and tile open windows into responsive slots (1, 2, or 3 windows). Drag title bar to reorder. |
 | **App Drawer Overlay** | **Verified** | Built-in app picker dialog with live search filter, recently used apps pinned to top, and soft keyboard input support (`FLAG_NOT_TOUCH_MODAL`). |
 | **Concurrency Cap (Max 3)** | **Verified** | `BubbleManager.kt` enforces a strict 3-bubble limit to conserve memory and CPU on budget devices (e.g., Redmi A2). |
-| **Diagnostics Console** | **Verified** | Real-time diagnostics log (`DiagLog`) streaming mode status (`embedded bubbles` vs `freeform fallback`), binder connection state, and touch events with 1-tap clipboard copy. |
+| **Diagnostics Console & Dump** | **Verified** | Real-time diagnostics log (`DiagLog`) with in-app Dump button and `dumpsys` activity/display state extraction. |
 
 ---
 

@@ -51,7 +51,7 @@ class EmbeddedWindow(
     private val onFailed: () -> Unit,
     private val onFocus: () -> Unit,
     private val onDragEnd: (centerX: Int, centerY: Int) -> Unit
-) : BubbleWindow, SurfaceHolder.Callback {
+) : BubbleWindow, SurfaceHolder.Callback2 {
 
     private companion object {
         const val TAG = "EmbeddedWindow"
@@ -64,6 +64,7 @@ class EmbeddedWindow(
         const val ENTER_MS = 220L
         const val EXIT_MS = 150L
         const val MOVE_MS = 280L
+        const val MANIPULATION_BUFFER_SCALE = 0.75f
     }
 
     private val ui = Handler(Looper.getMainLooper())
@@ -83,6 +84,8 @@ class EmbeddedWindow(
     private var downTime = 0L
     private var released = false
     private var failed = false
+    private var adaptiveBufferActive = false
+    private var hardwareBufferReady = false
     private var enterAnimator: ValueAnimator? = null
     private var moveAnimator: ValueAnimator? = null
 
@@ -152,6 +155,17 @@ class EmbeddedWindow(
             }
             start()
         }
+    }
+
+    /** Captures current task/display/surface state in logcat for black-screen debugging. */
+    override fun dumpDiagnostics() {
+        DiagnosticsDump.dump(
+            backend = backend,
+            packageName = pkg,
+            displayId = displayId,
+            surface = root?.findViewById(R.id.surface),
+            hardwareBufferReady = hardwareBufferReady
+        )
     }
 
     // ---- window
@@ -259,6 +273,7 @@ class EmbeddedWindow(
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         activeHolder = holder
+        hardwareBufferReady = false
         val existing = virtualDisplay
         if (existing != null) {
             existing.surface = holder.surface
@@ -290,12 +305,22 @@ class EmbeddedWindow(
         }
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        DiagLog.log(TAG, "$pkg surface changed ${width}x$height valid=${holder.surface.isValid}")
+    }
+
+    override fun surfaceRedrawNeeded(holder: SurfaceHolder) {
+        if (!hardwareBufferReady) {
+            hardwareBufferReady = true
+            DiagLog.log(TAG, "$pkg surface redraw received; hardware buffer path is active")
+        }
+    }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         // An old window can be destroyed after a new one took over, so only react to the active one.
         if (holder === activeHolder) {
             activeHolder = null
+            hardwareBufferReady = false
             virtualDisplay?.surface = null
         }
     }
@@ -303,6 +328,7 @@ class EmbeddedWindow(
     private fun fail() {
         if (failed || released) return
         failed = true
+        dumpDiagnostics()
         DiagLog.log(TAG, "Embedding is not supported here, switching to freeform windows")
         onFailed()
     }
@@ -356,6 +382,7 @@ class EmbeddedWindow(
                     val dx = (event.rawX - downX).toInt()
                     val dy = (event.rawY - downY).toInt()
                     if (moved || abs(dx) > slop || abs(dy) > slop) {
+                        if (!moved) beginAdaptiveBuffer()
                         moved = true
                         params.x = startX + dx
                         params.y = startY + dy
@@ -364,10 +391,11 @@ class EmbeddedWindow(
                     }
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    if (moved) {
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (moved) endAdaptiveBuffer()
+                    if (event.actionMasked == MotionEvent.ACTION_UP && moved) {
                         onDragEnd(params.x + surfaceWidth / 2, params.y + (surfaceHeight + dp(TITLE_DP)) / 2)
-                    } else {
+                    } else if (event.actionMasked == MotionEvent.ACTION_UP) {
                         onFocus()
                     }
                     true
@@ -392,6 +420,7 @@ class EmbeddedWindow(
                     initialWidth = surfaceWidth
                     initialHeight = surfaceHeight
                     resizing = true
+                    beginAdaptiveBuffer()
                     moveAnimator?.cancel()
                     handle.alpha = 1.0f
                     handle.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
@@ -418,7 +447,6 @@ class EmbeddedWindow(
                                 width = newW
                                 height = newH
                             }
-                            virtualDisplay?.resize(newW, newH, metrics.densityDpi)
                             runCatching { wm.updateViewLayout(window, params) }
                         }
                     }
@@ -428,6 +456,7 @@ class EmbeddedWindow(
                     if (resizing) {
                         resizing = false
                         handle.alpha = 0.75f
+                        endAdaptiveBuffer()
                         virtualDisplay?.resize(surfaceWidth, surfaceHeight, metrics.densityDpi)
                         runCatching { wm.updateViewLayout(window, params) }
                         DiagLog.log(TAG, "$pkg resized to ${surfaceWidth}x${surfaceHeight}")
@@ -437,5 +466,29 @@ class EmbeddedWindow(
                 else -> false
             }
         }
+    }
+
+    /** Uses a smaller SurfaceView buffer while manipulating the outer window. */
+    private fun beginAdaptiveBuffer() {
+        if (adaptiveBufferActive) return
+        val surface = root?.findViewById<SurfaceView>(R.id.surface) ?: return
+        val holder = activeHolder ?: surface.holder
+        val width = surface.width.takeIf { it > 0 } ?: surfaceWidth
+        val height = surface.height.takeIf { it > 0 } ?: surfaceHeight
+        holder.setFixedSize(
+            (width * MANIPULATION_BUFFER_SCALE).toInt().coerceAtLeast(1),
+            (height * MANIPULATION_BUFFER_SCALE).toInt().coerceAtLeast(1)
+        )
+        adaptiveBufferActive = true
+        DiagLog.log(TAG, "$pkg adaptive buffer enabled at ${width}x$height -> " +
+            "${(width * MANIPULATION_BUFFER_SCALE).toInt()}x${(height * MANIPULATION_BUFFER_SCALE).toInt()}")
+    }
+
+    /** Restores the native buffer after the gesture and lets the final resize settle once. */
+    private fun endAdaptiveBuffer() {
+        if (!adaptiveBufferActive) return
+        activeHolder?.setSizeFromLayout()
+        adaptiveBufferActive = false
+        DiagLog.log(TAG, "$pkg adaptive buffer restored to layout size ${surfaceWidth}x$surfaceHeight")
     }
 }

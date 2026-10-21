@@ -18,4 +18,7 @@ interface BubbleWindow {
 
     /** Puts the window above the other windows. */
     fun raise() {}
+
+    /** Captures current task/display/surface state in logcat for debugging. */
+    fun dumpDiagnostics() {}
 }

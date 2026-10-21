@@ -23,6 +23,7 @@
     <string name="section_diag">Diagnostics</string>
     <string name="diag_copy">Copy</string>
     <string name="diag_clear">Clear</string>
+    <string name="diag_dump">Dump</string>
     <string name="diag_empty">No activity yet.</string>
     <string name="diag_copied">Copied to clipboard</string>
 

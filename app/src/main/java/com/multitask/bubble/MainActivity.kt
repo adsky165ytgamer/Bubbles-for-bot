@@ -138,6 +138,15 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.diag_copied, Toast.LENGTH_SHORT).show()
         }
         binding.btnClear.setOnClickListener { DiagLog.clear() }
+        binding.btnDump.setOnClickListener {
+            if (BubbleOverlayService.running) {
+                BubbleOverlayService.dumpDiagnostics(this)
+            } else {
+                val privileged = runCatching { backend.dumpDiagnostics("com.multitask.bubble", 0) }
+                    .getOrElse { "Shizuku diagnostics failed: ${it.message}" }
+                DiagLog.log("BubbleDiagnostics", "Service not running.\n$privileged")
+            }
+        }
     }
 
     // ---- status

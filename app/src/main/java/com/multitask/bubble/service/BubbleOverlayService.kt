@@ -51,6 +51,7 @@ class BubbleOverlayService : Service() {
     companion object {
         const val ACTION_ADD = "com.multitask.bubble.ADD"
         const val ACTION_STOP = "com.multitask.bubble.STOP"
+        const val ACTION_DIAGNOSTICS = "com.multitask.bubble.DIAGNOSTICS"
         const val EXTRA_PKG = "pkg"
 
         private const val TAG = "BubbleService"
@@ -86,6 +87,13 @@ class BubbleOverlayService : Service() {
 
         fun stop(context: Context) {
             context.stopService(Intent(context, BubbleOverlayService::class.java))
+        }
+
+        fun dumpDiagnostics(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, BubbleOverlayService::class.java).setAction(ACTION_DIAGNOSTICS)
+            )
         }
     }
 
@@ -154,6 +162,14 @@ class BubbleOverlayService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopSelf()
             ACTION_ADD -> intent.getStringExtra(EXTRA_PKG)?.let { openBubble(it) }
+            ACTION_DIAGNOSTICS -> {
+                DiagLog.log(TAG, "Diagnostics requested; active windows: ${windows.keys}")
+                if (windows.isEmpty()) {
+                    DiagLog.log(TAG, "No active bubble windows to dump.")
+                } else {
+                    windows.values.forEach { it.dumpDiagnostics() }
+                }
+            }
         }
         return START_STICKY
     }

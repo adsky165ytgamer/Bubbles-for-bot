@@ -35,4 +35,7 @@ interface WindowBackend {
 
     /** Blocking. Force-stops the app. */
     fun close(packageName: String)
+
+    /** Returns a concise task/display dump for black-screen diagnostics. */
+    fun dumpDiagnostics(packageName: String, displayId: Int): String = "backend diagnostics unavailable"
 }
