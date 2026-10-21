@@ -18,8 +18,8 @@ interface WindowBackend {
     /** Blocking. Starts the app's launcher activity on the given display. */
     fun launchOnDisplay(packageName: String, displayId: Int): Boolean
 
-    /** Forwards one touch event to a display. Single binder call. */
-    fun injectMotion(displayId: Int, action: Int, x: Float, y: Float, downTime: Long)
+    /** Forwards one multi-pointer touch frame to a display. Single binder call. */
+    fun injectTouch(displayId: Int, action: Int, downTime: Long, ids: IntArray, xs: FloatArray, ys: FloatArray)
 
     fun injectKey(displayId: Int, keyCode: Int)
 
@@ -36,4 +36,3 @@ interface WindowBackend {
     /** Blocking. Force-stops the app. */
     fun close(packageName: String)
 }
-

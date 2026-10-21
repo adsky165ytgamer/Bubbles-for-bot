@@ -33,7 +33,7 @@ class ShizukuWindowBackend(private val context: Context) : WindowBackend {
     // Bump version() whenever ShellService or its AIDL changes, or Shizuku keeps the old process.
     private val userServiceArgs = Shizuku.UserServiceArgs(
         ComponentName(context.packageName, ShellService::class.java.name)
-    ).daemon(false).processNameSuffix("shell").debuggable(false).version(3)
+    ).daemon(false).processNameSuffix("shell").debuggable(false).version(4)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -149,9 +149,12 @@ class ShizukuWindowBackend(private val context: Context) : WindowBackend {
         sh("am task resize $taskId ${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}")
     }
 
-    override fun injectMotion(displayId: Int, action: Int, x: Float, y: Float, downTime: Long) {
+    override fun injectTouch(
+        displayId: Int, action: Int, downTime: Long,
+        ids: IntArray, xs: FloatArray, ys: FloatArray
+    ) {
         val ok = try {
-            shell?.injectMotion(displayId, action, x, y, downTime) ?: false
+            shell?.injectTouch(displayId, action, downTime, ids, xs, ys) ?: false
         } catch (e: Exception) {
             false
         }
@@ -201,4 +204,3 @@ class ShizukuWindowBackend(private val context: Context) : WindowBackend {
         return output
     }
 }
-

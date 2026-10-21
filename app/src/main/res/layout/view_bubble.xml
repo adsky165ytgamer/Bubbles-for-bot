@@ -14,4 +14,3 @@
         android:padding="9dp"
         android:scaleType="fitCenter" />
 </FrameLayout>
-

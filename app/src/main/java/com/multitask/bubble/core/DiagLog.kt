@@ -33,4 +33,3 @@ object DiagLog {
         listener?.invoke("")
     }
 }
-

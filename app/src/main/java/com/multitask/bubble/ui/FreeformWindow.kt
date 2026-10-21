@@ -16,8 +16,10 @@ class FreeformWindow(
     private val pkg: String
 ) : BubbleWindow {
 
-    private val bounds: Rect
     private val offscreen = Rect(-3000, -3000, -2000, -2000)
+
+    @Volatile
+    private var bounds: Rect
 
     @Volatile
     private var taskId = -1
@@ -30,9 +32,10 @@ class FreeformWindow(
     }
 
     override fun show() {
+        val target = bounds
         // Launching again reuses the existing task and brings it to the front.
         worker.execute {
-            val id = backend.launchFreeform(pkg, bounds)
+            val id = backend.launchFreeform(pkg, target)
             if (id > 0) taskId = id
         }
     }
@@ -44,5 +47,10 @@ class FreeformWindow(
     override fun release() {
         worker.execute { backend.close(pkg) }
     }
-}
 
+    override fun setBounds(bounds: Rect, animate: Boolean) {
+        this.bounds = Rect(bounds)
+        val target = this.bounds
+        worker.execute { if (taskId > 0) backend.moveTask(taskId, target) }
+    }
+}

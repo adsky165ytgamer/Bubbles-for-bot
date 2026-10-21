@@ -34,8 +34,19 @@ class BubbleManagerTest {
     }
 
     @Test
-    fun onlyOneBubbleIsOpenAtATime() {
+    fun severalBubblesCanBeOpenByDefault() {
         val manager = BubbleManager(context) {}
+        manager.open("app.one")
+
+        val change = manager.open("app.two")
+
+        assertTrue(change.collapsed.isEmpty())
+        assertTrue(manager.snapshot().all { it.expanded })
+    }
+
+    @Test
+    fun singleOpenModeCollapsesTheOthers() {
+        val manager = BubbleManager(context, singleOpen = true) {}
         manager.open("app.one")
 
         val change = manager.open("app.two")
@@ -89,6 +100,20 @@ class BubbleManagerTest {
     }
 
     @Test
+    fun moveToPutsTheBubbleAtTheGivenIndex() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+        manager.open("app.two")
+        manager.open("app.three")
+
+        manager.moveTo("app.three", 0)
+        assertEquals(listOf("app.three", "app.one", "app.two"), manager.snapshot().map { it.pkg })
+
+        manager.moveTo("app.three", 2)
+        assertEquals(listOf("app.one", "app.two", "app.three"), manager.snapshot().map { it.pkg })
+    }
+
+    @Test
     fun changesNotifyTheListener() {
         var calls = 0
         val manager = BubbleManager(context) { calls++ }
@@ -98,4 +123,3 @@ class BubbleManagerTest {
         assertEquals(3, calls)
     }
 }
-

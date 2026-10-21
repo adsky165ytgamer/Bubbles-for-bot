@@ -1,0 +1,3366 @@
+BUBBLE MANAGER (Bubbles-for-bot), FULL REPO AS ONE TEXT FILE, POLISH VERSION
+
+INSTRUCTIONS FOR THE CODING AGENT
+1. Treat every block between "===== FILE: <path> =====" and "===== END FILE =====" as the complete content of that file. Create or overwrite each file at that path, relative to the repo root. Do not alter the content.
+2. Delete the files listed under "FILES TO DELETE" below.
+3. Keep these untouched, they are unchanged and not included here: settings.gradle.kts, .gitignore, app/.gitignore, gradle/wrapper/gradle-wrapper.properties, app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml, app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml.
+4. Build the debug APK and fix any compile errors without changing the architecture or the design tokens. Report anything you had to change. The code has not been compiled by its author.
+5. Test on a real device: Shizuku running and authorized, overlay permission, Start service. First log line says "Mode: embedded bubbles" or "Mode: freeform fallback".
+   - Tap the grid chip: an app drawer opens with search, recent apps first. Pick an app: a floating Material window appears and the app runs INSIDE it.
+   - Drag the chip anywhere: it stays there after restart.
+   - Open two or three apps, then LONG PRESS the chip: haptic buzz, chip turns solid teal, windows animate into a neat grid in bubble order. Drag a window by its title bar and release: it snaps to the nearest slot and the others reorder. Long press the chip again to leave arrange mode.
+   - Pinch to zoom in a map app, double tap to zoom, scroll, fling, back button.
+   - Minimize hides the window (bubble stays). Tap the bubble to bring it back. Drag a bubble to the X: the app is force-stopped.
+   Open the Diagnostics card and copy the log if anything fails.
+
+HOW IT WORKS
+- Each bubble owns a private VirtualDisplay (public DisplayManager API). Its pixels are drawn into a SurfaceView inside our own overlay window, so we own the frame, minimize, close, move and resize (VirtualDisplay.resize).
+- Shizuku (shell UID) starts the app on that display with "am start --display <id>" and injects ALL touch pointers with the hidden input service, so pinch, double tap and flings are handled by the app itself.
+- Arrange mode tiles open windows in bubble order: 1 fills the area, 2 stack (portrait) or sit side by side (landscape), 3 is two on top and one full-width below.
+- The chip is an app drawer built as our own overlay (a service cannot show a bottom sheet). It becomes focusable only while open so the search field can use the keyboard.
+- Fallback: if the ROM lacks the secondary-display feature, or launching on our display fails, bubbles switch to the system freeform window. Arrange then resizes those tasks with am task resize, best effort.
+- BubbleManager is pure state (cap of 3, recents, order, persistence) and unit tested. Pass singleOpen = true to its constructor for strict Android 17 behavior (one window at a time).
+
+KNOWN GAPS
+- Keyboard typing inside embedded apps is not supported yet. Taps, scrolling, pinch and the back button work.
+- Several embedded apps at once cost RAM and GPU. If the phone lags, lower MAX_BUBBLES in BubbleManager.kt or use singleOpen.
+- No manual window resize handle yet (arrange mode resizes).
+- Dragging a window does not persist its free position.
+
+FILES TO DELETE
+.env.example
+app/src/main/res/layout/view_recents_panel.xml
+app/src/main/res/drawable/ic_launcher_bubble.jpg
+app/src/main/res/drawable/ic_launcher_bubble_1792530602177.jpg
+app/src/main/res/mipmap-hdpi/ic_launcher.png
+app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+app/src/main/res/mipmap-mdpi/ic_launcher.png
+app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+app/src/main/res/mipmap-xhdpi/ic_launcher.png
+app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+app/src/main/res/xml/backup_rules.xml
+app/src/main/res/xml/data_extraction_rules.xml
+
+===== FILE: app/build.gradle.kts =====
+plugins {
+  alias(libs.plugins.android.application)
+}
+
+android {
+  namespace = "com.multitask.bubble"
+  compileSdk { version = release(36) { minorApiLevel = 1 } }
+
+  defaultConfig {
+    applicationId = "com.multitask.bubble"
+    minSdk = 29
+    targetSdk = 35
+    versionCode = 1
+    versionName = "1.0"
+  }
+
+  // Do not remove or modify these signingConfigs. They are necessary for building, installing,
+  // and updating Android apps in AI Studio.
+  signingConfigs {
+    create("release") {
+      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
+      storeFile = file(keystorePath)
+      storePassword = System.getenv("STORE_PASSWORD")
+      keyAlias = "upload"
+      keyPassword = System.getenv("KEY_PASSWORD")
+    }
+    create("debugConfig") {
+      storeFile = file("${rootDir}/debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
+  }
+
+  buildTypes {
+    release {
+      isCrunchPngs = false
+      isMinifyEnabled = false
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
+      // AI Studio.
+      signingConfig = signingConfigs.getByName("release")
+    }
+    debug {
+      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
+      // AI Studio.
+      signingConfig = signingConfigs.getByName("debugConfig")
+    }
+  }
+
+  compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+  }
+
+  buildFeatures {
+    viewBinding = true
+    aidl = true
+  }
+
+  testOptions { unitTests { isIncludeAndroidResources = true } }
+
+  dependenciesInfo {
+    includeInApk = false
+    includeInBundle = true
+  }
+}
+
+dependencies {
+  implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.appcompat)
+  implementation(libs.androidx.recyclerview)
+  implementation(libs.material)
+  implementation(libs.rikka.shizuku.api)
+  implementation(libs.rikka.shizuku.provider)
+
+  testImplementation(libs.junit)
+  testImplementation(libs.androidx.test.core)
+  testImplementation(libs.robolectric)
+}
+
+===== END FILE =====
+
+===== FILE: app/proguard-rules.pro =====
+# Shizuku instantiates this class by name inside the shell process.
+-keep class com.multitask.bubble.core.ShellService { *; }
+-keep class com.multitask.bubble.core.IShellService { *; }
+
+===== END FILE =====
+
+===== FILE: app/src/main/AndroidManifest.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Lets us list launchable apps without the restricted QUERY_ALL_PACKAGES permission. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.BubbleManager">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".service.BubbleOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating_app_bubbles" />
+        </service>
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    </application>
+</manifest>
+
+===== END FILE =====
+
+===== FILE: app/src/main/aidl/com/multitask/bubble/core/IShellService.aidl =====
+package com.multitask.bubble.core;
+
+interface IShellService {
+    void destroy() = 16777114; // required by Shizuku
+    String exec(String command) = 1;
+    boolean injectTouch(int displayId, int action, long downTime, in int[] ids, in float[] xs, in float[] ys) = 2;
+    boolean injectKey(int displayId, int keyCode) = 3;
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/MainActivity.kt =====
+package com.multitask.bubble
+
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.content.res.Configuration
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
+import com.google.android.material.color.MaterialColors
+import com.multitask.bubble.core.BubbleManager
+import com.multitask.bubble.core.DiagLog
+import com.multitask.bubble.core.ShizukuWindowBackend
+import com.multitask.bubble.databinding.ActivityMainBinding
+import com.multitask.bubble.databinding.ViewStatusRowBinding
+import com.multitask.bubble.service.BubbleOverlayService
+import com.multitask.bubble.ui.AppPickerSheet
+import rikka.shizuku.Shizuku
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var backend: ShizukuWindowBackend
+    private val ui = Handler(Looper.getMainLooper())
+
+    private val onBinderReceived = Shizuku.OnBinderReceivedListener { ui.post { refreshStatus() } }
+    private val onBinderDead = Shizuku.OnBinderDeadListener { ui.post { refreshStatus() } }
+
+    private var afterNotificationPrompt: (() -> Unit)? = null
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            // The service still runs if the user declines; only its notification stays hidden.
+            afterNotificationPrompt?.invoke()
+            afterNotificationPrompt = null
+        }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+        backend = ShizukuWindowBackend(applicationContext)
+
+        applyInsets()
+        bindStaticText()
+        bindActions()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Shizuku.addBinderReceivedListenerSticky(onBinderReceived)
+        Shizuku.addBinderDeadListener(onBinderDead)
+        DiagLog.listener = { text -> ui.post { showLog(text) } }
+        showLog(DiagLog.snapshot())
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshStatus()
+    }
+
+    override fun onStop() {
+        DiagLog.listener = null
+        Shizuku.removeBinderReceivedListener(onBinderReceived)
+        Shizuku.removeBinderDeadListener(onBinderDead)
+        super.onStop()
+    }
+
+    // ---- setup
+
+    private fun applyInsets() {
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        WindowCompat.getInsetsController(window, binding.root).apply {
+            isAppearanceLightStatusBars = !night
+            isAppearanceLightNavigationBars = !night
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            binding.content.updatePadding(
+                left = bars.left + dp(20),
+                top = bars.top + dp(24),
+                right = bars.right + dp(20),
+                bottom = bars.bottom + dp(24)
+            )
+            insets
+        }
+    }
+
+    private fun bindStaticText() {
+        binding.rowShizuku.title.setText(R.string.status_shizuku)
+        binding.rowOverlay.title.setText(R.string.status_overlay)
+        binding.rowService.title.setText(R.string.status_service)
+        binding.txtHint.text = getString(R.string.hint_limit, BubbleManager.MAX_BUBBLES)
+    }
+
+    private fun bindActions() {
+        binding.rowOverlay.root.setOnClickListener { openOverlaySettings() }
+
+        binding.btnStart.setOnClickListener {
+            withReady { withNotificationPermission { BubbleOverlayService.start(this); refreshSoon() } }
+        }
+        binding.btnAdd.setOnClickListener {
+            withReady {
+                AppPickerSheet(this) { pkg ->
+                    BubbleOverlayService.add(this, pkg)
+                    Toast.makeText(this, getString(R.string.toast_added, labelOf(pkg)), Toast.LENGTH_SHORT).show()
+                    refreshSoon()
+                }.show()
+            }
+        }
+        binding.btnStop.setOnClickListener {
+            BubbleOverlayService.stop(this)
+            refreshSoon()
+        }
+        binding.btnCopy.setOnClickListener {
+            val text = DiagLog.snapshot()
+            if (text.isBlank()) return@setOnClickListener
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.section_diag), text))
+            Toast.makeText(this, R.string.diag_copied, Toast.LENGTH_SHORT).show()
+        }
+        binding.btnClear.setOnClickListener { DiagLog.clear() }
+    }
+
+    // ---- status
+
+    private fun refreshStatus() {
+        val shizukuRunning = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+        val shizukuReady = backend.isReady()
+        setRow(
+            binding.rowShizuku, shizukuReady,
+            when {
+                !shizukuRunning -> R.string.status_shizuku_off
+                !shizukuReady -> R.string.status_shizuku_no_permission
+                else -> R.string.status_shizuku_ready
+            }
+        )
+        val overlayAllowed = Settings.canDrawOverlays(this)
+        setRow(
+            binding.rowOverlay, overlayAllowed,
+            if (overlayAllowed) R.string.status_overlay_on else R.string.status_overlay_off
+        )
+        val serviceRunning = BubbleOverlayService.running
+        setRow(
+            binding.rowService, serviceRunning,
+            if (serviceRunning) R.string.status_service_on else R.string.status_service_off
+        )
+    }
+
+    private fun refreshSoon() {
+        ui.postDelayed({ refreshStatus() }, 500)
+    }
+
+    private fun setRow(row: ViewStatusRowBinding, ok: Boolean, detail: Int) {
+        row.icon.setImageResource(if (ok) R.drawable.ic_check_circle else R.drawable.ic_error)
+        val tintAttr = if (ok) androidx.appcompat.R.attr.colorPrimary else androidx.appcompat.R.attr.colorError
+        row.icon.imageTintList = ColorStateList.valueOf(MaterialColors.getColor(this, tintAttr, 0))
+        row.detail.setText(detail)
+    }
+
+    private fun showLog(text: String) {
+        binding.txtLog.text = text.ifBlank { getString(R.string.diag_empty) }
+    }
+
+    // ---- permissions
+
+    private fun withReady(action: () -> Unit) {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, R.string.toast_overlay_needed, Toast.LENGTH_LONG).show()
+            openOverlaySettings()
+            return
+        }
+        if (!runCatching { Shizuku.pingBinder() }.getOrDefault(false)) {
+            Toast.makeText(this, R.string.toast_shizuku_off, Toast.LENGTH_LONG).show()
+            return
+        }
+        backend.requestPermission { granted ->
+            ui.post {
+                refreshStatus()
+                if (granted) action() else Toast.makeText(this, R.string.toast_shizuku_denied, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun withNotificationPermission(action: () -> Unit) {
+        val needed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        if (needed) {
+            afterNotificationPrompt = action
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            action()
+        }
+    }
+
+    private fun openOverlaySettings() {
+        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+    }
+
+    private fun labelOf(pkg: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/core/BubbleManager.kt =====
+package com.multitask.bubble.core
+
+import android.content.Context
+
+/**
+ * Pure bubble state: the list, the cap, recents and persistence. Main thread only, never blocks.
+ * The caller reacts to the returned [Change] (hide or release windows).
+ *
+ * With [singleOpen] true opening a bubble collapses the others, like Android 17. The default lets
+ * several windows stay open so they can be tiled.
+ */
+class BubbleManager(
+    context: Context,
+    private val singleOpen: Boolean = false,
+    private val onChanged: () -> Unit
+) {
+    data class Bubble(val pkg: String, val expanded: Boolean = false)
+
+    /** [evicted] bubbles were removed to make room. [collapsed] bubbles were open and got hidden. */
+    data class Change(
+        val evicted: List<String> = emptyList(),
+        val collapsed: List<String> = emptyList()
+    )
+
+    companion object {
+        const val MAX_BUBBLES = 3
+        const val MAX_RECENTS = 8
+        private const val PREFS = "bubbles"
+        private const val KEY_ACTIVE = "active"
+        private const val KEY_RECENTS = "recents"
+    }
+
+    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val bubbles = mutableListOf<Bubble>()
+    private val recents = mutableListOf<String>()
+
+    init {
+        restore()
+    }
+
+    fun snapshot(): List<Bubble> = bubbles.toList()
+
+    fun recentsSnapshot(): List<String> = recents.toList()
+
+    /** Adds the app if needed (evicting the oldest at the cap) and makes it the one open bubble. */
+    fun open(pkg: String): Change {
+        val evicted = mutableListOf<String>()
+        if (bubbles.none { it.pkg == pkg }) {
+            if (bubbles.size >= MAX_BUBBLES) {
+                val oldest = bubbles.first().pkg
+                remove(oldest)
+                evicted.add(oldest)
+            }
+            bubbles.add(Bubble(pkg))
+            recents.remove(pkg)
+        }
+        val collapsed = if (singleOpen) {
+            bubbles.filter { it.expanded && it.pkg != pkg }.map { it.pkg }
+        } else {
+            emptyList()
+        }
+        bubbles.replaceAll {
+            when {
+                it.pkg == pkg -> it.copy(expanded = true)
+                singleOpen -> it.copy(expanded = false)
+                else -> it
+            }
+        }
+        commit()
+        return Change(evicted, collapsed)
+    }
+
+    fun collapse(pkg: String) {
+        bubbles.replaceAll { if (it.pkg == pkg) it.copy(expanded = false) else it }
+        commit()
+    }
+
+    /** Moves the bubble so it ends up at [index] in the list. Order decides the tiling order. */
+    fun moveTo(pkg: String, index: Int) {
+        val from = bubbles.indexOfFirst { it.pkg == pkg }
+        if (from < 0) return
+        val item = bubbles.removeAt(from)
+        bubbles.add(index.coerceIn(0, bubbles.size), item)
+        commit()
+    }
+
+    /** Removes the bubble and remembers it in recents. */
+    fun dismiss(pkg: String) {
+        if (bubbles.none { it.pkg == pkg }) return
+        remove(pkg)
+        commit()
+    }
+
+    private fun remove(pkg: String) {
+        bubbles.removeAll { it.pkg == pkg }
+        recents.remove(pkg)
+        recents.add(0, pkg)
+        while (recents.size > MAX_RECENTS) recents.removeAt(recents.lastIndex)
+    }
+
+    private fun commit() {
+        prefs.edit()
+            .putString(KEY_ACTIVE, bubbles.joinToString(",") { it.pkg })
+            .putString(KEY_RECENTS, recents.joinToString(","))
+            .apply()
+        onChanged()
+    }
+
+    /** Restored bubbles start collapsed; their apps start fresh on first tap. */
+    private fun restore() {
+        prefs.getString(KEY_ACTIVE, "").orEmpty().split(",").filter { it.isNotBlank() }
+            .take(MAX_BUBBLES).forEach { bubbles.add(Bubble(it)) }
+        prefs.getString(KEY_RECENTS, "").orEmpty().split(",").filter { it.isNotBlank() }
+            .take(MAX_RECENTS).forEach { recents.add(it) }
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/core/DiagLog.kt =====
+package com.multitask.bubble.core
+
+import android.util.Log
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/** In-memory log shared by the activity and the overlay service, mirrored to logcat. */
+object DiagLog {
+    private const val MAX_CHARS = 6000
+    private const val TRIM_CHARS = 2000
+
+    private val buffer = StringBuilder()
+
+    /** Called on whichever thread logged. UI code must post to the main thread itself. */
+    @Volatile
+    var listener: ((String) -> Unit)? = null
+
+    fun log(tag: String, message: String) {
+        Log.d(tag, message)
+        val stamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        synchronized(buffer) {
+            buffer.append('[').append(stamp).append("] ").append(message).append('\n')
+            if (buffer.length > MAX_CHARS) buffer.delete(0, TRIM_CHARS)
+        }
+        listener?.invoke(snapshot())
+    }
+
+    fun snapshot(): String = synchronized(buffer) { buffer.toString() }
+
+    fun clear() {
+        synchronized(buffer) { buffer.setLength(0) }
+        listener?.invoke("")
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/core/ShellService.kt =====
+package com.multitask.bubble.core
+
+import android.os.IBinder
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.InputEvent
+import android.view.KeyEvent
+import android.view.MotionEvent
+import kotlin.system.exitProcess
+
+/**
+ * Runs inside the Shizuku shell process (UID 2000). Hidden APIs are reachable here because this
+ * is not a normal app process.
+ */
+class ShellService : IShellService.Stub() {
+
+    private val inputManager: Any? by lazy {
+        runCatching {
+            val binder = Class.forName("android.os.ServiceManager")
+                .getMethod("getService", String::class.java)
+                .invoke(null, "input") as IBinder
+            Class.forName("android.hardware.input.IInputManager\$Stub")
+                .getMethod("asInterface", IBinder::class.java)
+                .invoke(null, binder)
+        }.getOrNull()
+    }
+
+    private val injectMethod by lazy {
+        runCatching {
+            Class.forName("android.hardware.input.IInputManager")
+                .getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType)
+        }.getOrNull()
+    }
+
+    private val setDisplayId by lazy {
+        runCatching {
+            InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+        }.getOrNull()
+    }
+
+    override fun destroy() {
+        exitProcess(0)
+    }
+
+    override fun exec(command: String): String {
+        return try {
+            val process = ProcessBuilder("sh", "-c", command)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            output
+        } catch (e: Exception) {
+            "[exception] ${e.message}"
+        }
+    }
+
+    /**
+     * Forwards a whole touch frame. [action] is the raw MotionEvent action, so it already carries
+     * the pointer index for POINTER_DOWN/UP. The target app does its own pinch and double-tap
+     * detection from these raw pointers.
+     */
+    override fun injectTouch(
+        displayId: Int, action: Int, downTime: Long,
+        ids: IntArray, xs: FloatArray, ys: FloatArray
+    ): Boolean {
+        val count = ids.size
+        if (count == 0 || xs.size != count || ys.size != count) return false
+        val properties = Array(count) {
+            MotionEvent.PointerProperties().apply {
+                id = ids[it]
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }
+        }
+        val coords = Array(count) {
+            MotionEvent.PointerCoords().apply {
+                x = xs[it]
+                y = ys[it]
+                pressure = 1f
+                size = 1f
+            }
+        }
+        val event = MotionEvent.obtain(
+            downTime, SystemClock.uptimeMillis(), action, count, properties, coords,
+            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0
+        )
+        return try {
+            inject(event, displayId)
+        } finally {
+            event.recycle()
+        }
+    }
+
+    override fun injectKey(displayId: Int, keyCode: Int): Boolean {
+        val now = SystemClock.uptimeMillis()
+        val down = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
+        val up = KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0)
+        down.source = InputDevice.SOURCE_KEYBOARD
+        up.source = InputDevice.SOURCE_KEYBOARD
+        return inject(down, displayId) && inject(up, displayId)
+    }
+
+    private fun inject(event: InputEvent, displayId: Int): Boolean = try {
+        setDisplayId?.invoke(event, displayId)
+        // 0 = INJECT_INPUT_EVENT_MODE_ASYNC
+        injectMethod?.invoke(inputManager, event, 0) as? Boolean ?: false
+    } catch (e: Exception) {
+        false
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/core/ShizukuWindowBackend.kt =====
+package com.multitask.bubble.core
+
+import android.content.ComponentName
+import android.content.Context
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.graphics.Rect
+import android.os.IBinder
+import rikka.shizuku.Shizuku
+
+class ShizukuWindowBackend(private val context: Context) : WindowBackend {
+
+    companion object {
+        const val TAG = "ShizukuBackend"
+        private const val REQUEST_CODE = 1001
+        private const val LOG_OUTPUT_LIMIT = 300
+        private const val WINDOWING_MODE_FREEFORM = 5
+        private const val TASK_POLL_ATTEMPTS = 8
+        private const val TASK_POLL_DELAY_MS = 250L
+    }
+
+    @Volatile
+    private var shell: IShellService? = null
+
+    @Volatile
+    private var prepared = false
+
+    @Volatile
+    private var injectFailureLogged = false
+
+    private val waiting = mutableListOf<() -> Unit>()
+
+    // Bump version() whenever ShellService or its AIDL changes, or Shizuku keeps the old process.
+    private val userServiceArgs = Shizuku.UserServiceArgs(
+        ComponentName(context.packageName, ShellService::class.java.name)
+    ).daemon(false).processNameSuffix("shell").debuggable(false).version(4)
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            shell = IShellService.Stub.asInterface(binder)
+            DiagLog.log(TAG, "Shell service connected")
+            val callbacks = synchronized(waiting) { waiting.toList().also { waiting.clear() } }
+            callbacks.forEach { it() }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            shell = null
+            prepared = false
+            DiagLog.log(TAG, "Shell service disconnected")
+        }
+    }
+
+    override fun isReady(): Boolean = try {
+        Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+    } catch (e: Exception) {
+        false
+    }
+
+    override fun requestPermission(onResult: (Boolean) -> Unit) {
+        if (!Shizuku.pingBinder()) {
+            onResult(false)
+            return
+        }
+        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            onResult(true)
+            return
+        }
+        val listener = object : Shizuku.OnRequestPermissionResultListener {
+            override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
+                if (requestCode != REQUEST_CODE) return
+                Shizuku.removeRequestPermissionResultListener(this)
+                val granted = grantResult == PackageManager.PERMISSION_GRANTED
+                DiagLog.log(TAG, "Shizuku permission ${if (granted) "granted" else "denied"}")
+                onResult(granted)
+            }
+        }
+        Shizuku.addRequestPermissionResultListener(listener)
+        Shizuku.requestPermission(REQUEST_CODE)
+    }
+
+    override fun connect(onConnected: () -> Unit) {
+        if (shell != null) {
+            onConnected()
+            return
+        }
+        if (!isReady()) {
+            DiagLog.log(TAG, "Cannot connect: Shizuku is not running or not authorized")
+            return
+        }
+        val firstWaiter = synchronized(waiting) {
+            waiting.add(onConnected)
+            waiting.size == 1
+        }
+        if (firstWaiter) {
+            DiagLog.log(TAG, "Binding shell service")
+            Shizuku.bindUserService(userServiceArgs, connection)
+        }
+    }
+
+    override fun disconnect() {
+        if (shell == null) return
+        runCatching { Shizuku.unbindUserService(userServiceArgs, connection, true) }
+        shell = null
+        prepared = false
+    }
+
+    override fun prepare() {
+        if (prepared) return
+        // Lets apps that are not marked resizable fill a secondary display or a freeform window.
+        sh("settings put global force_resizable_activities 1")
+        sh("settings put global enable_freeform_support 1")
+        prepared = true
+    }
+
+    override fun launchOnDisplay(packageName: String, displayId: Int): Boolean {
+        val component = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?.component?.flattenToShortString()
+        if (component == null) {
+            DiagLog.log(TAG, "No launcher activity found for $packageName")
+            return false
+        }
+        val output = sh("am start -n $component --display $displayId")
+        val failed = output.contains("Error", ignoreCase = true) ||
+            output.contains("Exception", ignoreCase = true)
+        if (failed) DiagLog.log(TAG, "Launch on display $displayId failed for $packageName")
+        return !failed
+    }
+
+    override fun launchFreeform(packageName: String, bounds: Rect): Int {
+        val component = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?.component?.flattenToShortString()
+        if (component == null) {
+            DiagLog.log(TAG, "No launcher activity found for $packageName")
+            return -1
+        }
+        sh("am start -n $component --windowingMode $WINDOWING_MODE_FREEFORM")
+        var taskId = -1
+        for (attempt in 0 until TASK_POLL_ATTEMPTS) {
+            taskId = findTaskId(packageName)
+            if (taskId > 0) break
+            Thread.sleep(TASK_POLL_DELAY_MS)
+        }
+        if (taskId > 0) moveTask(taskId, bounds)
+        else DiagLog.log(TAG, "Could not find a task for $packageName, so it cannot be moved")
+        return taskId
+    }
+
+    override fun moveTask(taskId: Int, bounds: Rect) {
+        sh("am task resize $taskId ${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}")
+    }
+
+    override fun injectTouch(
+        displayId: Int, action: Int, downTime: Long,
+        ids: IntArray, xs: FloatArray, ys: FloatArray
+    ) {
+        val ok = try {
+            shell?.injectTouch(displayId, action, downTime, ids, xs, ys) ?: false
+        } catch (e: Exception) {
+            false
+        }
+        if (!ok) logInjectFailureOnce()
+    }
+
+    override fun injectKey(displayId: Int, keyCode: Int) {
+        val ok = try {
+            shell?.injectKey(displayId, keyCode) ?: false
+        } catch (e: Exception) {
+            false
+        }
+        if (!ok) logInjectFailureOnce()
+    }
+
+    override fun close(packageName: String) {
+        sh("am force-stop $packageName")
+    }
+
+    private fun findTaskId(packageName: String): Int {
+        val dump = sh("dumpsys activity recents", quiet = true)
+        val pattern = Regex("""Task\{\S+ #(\d+)[^}]*?A=(?:\d+:)?${Regex.escape(packageName)}\b""")
+        return pattern.find(dump)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+    }
+
+    private fun logInjectFailureOnce() {
+        if (injectFailureLogged) return
+        injectFailureLogged = true
+        DiagLog.log(TAG, "Input injection failed. Touch and keys will not reach the embedded app")
+    }
+
+    private fun sh(command: String, quiet: Boolean = false): String {
+        val service = shell
+        if (service == null) {
+            DiagLog.log(TAG, "$command -> no shell connected")
+            return ""
+        }
+        val output = try {
+            service.exec(command)
+        } catch (e: Exception) {
+            "[remote error] ${e.message}"
+        }
+        if (!quiet) {
+            val trimmed = output.trim().take(LOG_OUTPUT_LIMIT)
+            DiagLog.log(TAG, if (trimmed.isEmpty()) command else "$command -> $trimmed")
+        }
+        return output
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/core/WindowBackend.kt =====
+package com.multitask.bubble.core
+
+import android.graphics.Rect
+
+interface WindowBackend {
+    fun isReady(): Boolean
+    fun requestPermission(onResult: (Boolean) -> Unit)
+
+    /** Binds the privileged shell. [onConnected] is not called if Shizuku is unavailable. */
+    fun connect(onConnected: () -> Unit)
+    fun disconnect()
+
+    /** Blocking. One-time device setup so apps can run on secondary displays or freeform windows. */
+    fun prepare()
+
+    // ---- Embedded mode: the app runs on our own virtual display
+
+    /** Blocking. Starts the app's launcher activity on the given display. */
+    fun launchOnDisplay(packageName: String, displayId: Int): Boolean
+
+    /** Forwards one multi-pointer touch frame to a display. Single binder call. */
+    fun injectTouch(displayId: Int, action: Int, downTime: Long, ids: IntArray, xs: FloatArray, ys: FloatArray)
+
+    fun injectKey(displayId: Int, keyCode: Int)
+
+    // ---- Fallback mode: the system's own freeform window
+
+    /** Blocking. Launches the app freeform at [bounds]. Returns the task id, or -1 if not found. */
+    fun launchFreeform(packageName: String, bounds: Rect): Int
+
+    /** Blocking. */
+    fun moveTask(taskId: Int, bounds: Rect)
+
+    // ---- Both modes
+
+    /** Blocking. Force-stops the app. */
+    fun close(packageName: String)
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/service/BubbleOverlayService.kt =====
+package com.multitask.bubble.service
+
+import android.animation.ValueAnimator
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.PixelFormat
+import android.graphics.Point
+import android.graphics.Rect
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.view.ContextThemeWrapper
+import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewConfiguration
+import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
+import android.widget.EditText
+import android.widget.ImageView
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.color.MaterialColors
+import com.multitask.bubble.MainActivity
+import com.multitask.bubble.R
+import com.multitask.bubble.core.BubbleManager
+import com.multitask.bubble.core.DiagLog
+import com.multitask.bubble.core.ShizukuWindowBackend
+import com.multitask.bubble.ui.AppList
+import com.multitask.bubble.ui.AppListAdapter
+import com.multitask.bubble.ui.BubbleWindow
+import com.multitask.bubble.ui.EmbeddedWindow
+import com.multitask.bubble.ui.FreeformWindow
+import java.util.concurrent.Executors
+import kotlin.concurrent.thread
+import kotlin.math.hypot
+
+class BubbleOverlayService : Service() {
+
+    companion object {
+        const val ACTION_ADD = "com.multitask.bubble.ADD"
+        const val ACTION_STOP = "com.multitask.bubble.STOP"
+        const val EXTRA_PKG = "pkg"
+
+        private const val TAG = "BubbleService"
+        private const val FEATURE_SECONDARY_DISPLAYS = "android.software.activities_on_secondary_displays"
+        private const val CHANNEL_ID = "bubble_service"
+        private const val NOTIFICATION_ID = 101
+        private const val CHIP_KEY = "__chip__"
+        private const val POSITIONS_PREFS = "bubble_positions"
+        private const val BUBBLE_DP = 56
+        private const val CLOSE_ZONE_DP = 80
+        private const val CLOSE_ZONE_BOTTOM_DP = 96
+        private const val CLOSE_HIT_RADIUS_DP = 56
+        private const val FIRST_SLOT_TOP_DP = 160
+        private const val SLOT_STEP_DP = 64
+        private const val DRAWER_MAX_WIDTH_DP = 360
+
+        @Volatile
+        var running: Boolean = false
+            private set
+
+        fun start(context: Context) {
+            ContextCompat.startForegroundService(context, Intent(context, BubbleOverlayService::class.java))
+        }
+
+        fun add(context: Context, pkg: String) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, BubbleOverlayService::class.java)
+                    .setAction(ACTION_ADD)
+                    .putExtra(EXTRA_PKG, pkg)
+            )
+        }
+
+        fun stop(context: Context) {
+            context.stopService(Intent(context, BubbleOverlayService::class.java))
+        }
+    }
+
+    private class BubbleHandle(
+        val root: View,
+        val icon: ImageView,
+        val params: WindowManager.LayoutParams
+    )
+
+    private lateinit var themed: Context
+    private lateinit var wm: WindowManager
+    private lateinit var backend: ShizukuWindowBackend
+    private lateinit var manager: BubbleManager
+
+    private val ui = Handler(Looper.getMainLooper())
+    private val worker = Executors.newSingleThreadExecutor()
+    private val handles = mutableMapOf<String, BubbleHandle>()
+    private val windows = mutableMapOf<String, BubbleWindow>()
+    private val positions = mutableMapOf<String, Point>()
+    private val pendingAdds = mutableListOf<String>()
+    private var ready = false
+
+    // Embedded bubbles need secondary-display support. If the ROM lacks it, or a launch on our
+    // virtual display fails, every bubble falls back to the system's freeform windows.
+    private var embeddedBroken = false
+    private val embeddedSupported by lazy { packageManager.hasSystemFeature(FEATURE_SECONDARY_DISPLAYS) }
+
+    private var arranging = false
+    private var topWindow: String? = null
+    private var chip: BubbleHandle? = null
+    private var closeZone: View? = null
+    private var drawer: View? = null
+
+    private val density by lazy { resources.displayMetrics.density }
+    private fun dp(value: Int) = (value * density).toInt()
+    private val positionPrefs by lazy { getSharedPreferences(POSITIONS_PREFS, MODE_PRIVATE) }
+
+    override fun onCreate() {
+        super.onCreate()
+        running = true
+        themed = ContextThemeWrapper(this, R.style.Theme_BubbleManager)
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        backend = ShizukuWindowBackend(applicationContext)
+        manager = BubbleManager(applicationContext) { render() }
+
+        startAsForeground()
+        render() // bubbles restored from the last session show up right away
+
+        backend.connect {
+            worker.execute {
+                backend.prepare()
+                ui.post {
+                    ready = true
+                    DiagLog.log(
+                        TAG,
+                        if (embeddedSupported) "Mode: embedded bubbles"
+                        else "Mode: freeform fallback (no secondary display support)"
+                    )
+                    pendingAdds.toList().also { pendingAdds.clear() }.forEach { openBubble(it) }
+                }
+            }
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> stopSelf()
+            ACTION_ADD -> intent.getStringExtra(EXTRA_PKG)?.let { openBubble(it) }
+        }
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        running = false
+        drawer?.let { runCatching { wm.removeView(it) } }
+        drawer = null
+        closeZone?.let { runCatching { wm.removeView(it) } }
+        closeZone = null
+        windows.values.forEach { it.release() }
+        windows.clear()
+        handles.values.forEach { runCatching { wm.removeView(it.root) } }
+        handles.clear()
+        chip?.let { runCatching { wm.removeView(it.root) } }
+        chip = null
+        worker.execute { backend.disconnect() } // queued after the force-stops above
+        worker.shutdown()
+        super.onDestroy()
+    }
+
+    // ---- foreground notification
+
+    private fun startAsForeground() {
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_LOW)
+        )
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        val stop = PendingIntent.getService(
+            this, 1,
+            Intent(this, BubbleOverlayService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.notif_title))
+            .setContentText(getString(R.string.notif_text))
+            .setSmallIcon(R.drawable.ic_bubble)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .addAction(R.drawable.ic_stop, getString(R.string.notif_stop), stop)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    // ---- bubble actions (main thread only)
+
+    private fun createWindow(pkg: String): BubbleWindow =
+        if (embeddedSupported && !embeddedBroken) {
+            EmbeddedWindow(
+                context = themed, wm = wm, backend = backend, worker = worker, pkg = pkg,
+                onMinimize = { minimizeBubble(pkg) },
+                onClose = { closeBubble(pkg) },
+                onFailed = { onEmbeddedFailed(pkg) },
+                onFocus = { raiseWindow(pkg) },
+                onDragEnd = { x, y -> onWindowDragEnd(pkg, x, y) }
+            )
+        } else {
+            FreeformWindow(this, backend, worker, pkg)
+        }
+
+    private fun openBubble(pkg: String) {
+        if (!ready) {
+            if (pkg !in pendingAdds) pendingAdds.add(pkg)
+            return
+        }
+        val change = manager.open(pkg)
+        change.evicted.forEach { windows.remove(it)?.release() }
+        change.collapsed.forEach { windows[it]?.hide() }
+        windows.getOrPut(pkg) { createWindow(pkg) }.show()
+        topWindow = pkg
+        if (arranging) arrangeWindows()
+    }
+
+    private fun minimizeBubble(pkg: String) {
+        manager.collapse(pkg)
+        windows[pkg]?.hide()
+        if (arranging) arrangeWindows()
+    }
+
+    private fun closeBubble(pkg: String) {
+        manager.dismiss(pkg)
+        windows.remove(pkg)?.release()
+        if (arranging) arrangeWindows()
+    }
+
+    private fun onBubbleTap(pkg: String) {
+        val open = manager.snapshot().firstOrNull { it.pkg == pkg }?.expanded == true
+        if (open) minimizeBubble(pkg) else openBubble(pkg)
+    }
+
+    private fun onEmbeddedFailed(pkg: String) {
+        embeddedBroken = true
+        windows.remove(pkg)?.release()
+        ui.postDelayed({
+            if (manager.snapshot().any { it.pkg == pkg }) openBubble(pkg)
+        }, 400)
+    }
+
+    private fun raiseWindow(pkg: String) {
+        if (topWindow == pkg) return
+        windows[pkg]?.raise()
+        topWindow = pkg
+    }
+
+    // ---- arrange mode: tile the open windows neatly, in bubble order
+
+    private fun openPackages() = manager.snapshot().filter { it.expanded }.map { it.pkg }
+
+    private fun toggleArrange() = setArranging(!arranging)
+
+    private fun setArranging(on: Boolean) {
+        if (on && openPackages().isEmpty()) {
+            DiagLog.log(TAG, "Open at least one window before arranging")
+            return
+        }
+        arranging = on
+        styleChip()
+        DiagLog.log(TAG, if (on) "Arrange mode on. Drag a window to reorder, long press the chip to leave" else "Arrange mode off")
+        if (on) arrangeWindows()
+    }
+
+    private fun arrangeWindows() {
+        val open = openPackages()
+        if (open.isEmpty()) {
+            setArranging(false)
+            return
+        }
+        val slots = slotRects(open.size)
+        open.forEachIndexed { index, pkg -> windows[pkg]?.setBounds(slots[index], animate = true) }
+    }
+
+    /** A dropped window takes the nearest slot and the others shuffle to keep a neat order. */
+    private fun onWindowDragEnd(pkg: String, centerX: Int, centerY: Int) {
+        raiseWindow(pkg)
+        if (!arranging) return
+        val open = openPackages()
+        if (pkg !in open) return
+        val slots = slotRects(open.size)
+        val nearest = slots.indices.minByOrNull { index ->
+            hypot((slots[index].centerX() - centerX).toDouble(), (slots[index].centerY() - centerY).toDouble())
+        } ?: return
+        val targetPkg = open[nearest]
+        if (targetPkg != pkg) {
+            val targetIndex = manager.snapshot().indexOfFirst { it.pkg == targetPkg }
+            manager.moveTo(pkg, targetIndex)
+        }
+        arrangeWindows()
+    }
+
+    /** One window fills the area. Two stack in portrait or sit side by side in landscape. */
+    private fun slotRects(count: Int): List<Rect> {
+        if (count <= 0) return emptyList()
+        val metrics = resources.displayMetrics
+        val gap = dp(8)
+        val area = Rect(gap, dp(36), metrics.widthPixels - dp(BUBBLE_DP) - gap, metrics.heightPixels - dp(24))
+        val portrait = metrics.heightPixels >= metrics.widthPixels
+        val columns = if (count == 1 || (count == 2 && portrait)) 1 else 2
+        val rows = (count + columns - 1) / columns
+        val cellWidth = (area.width() - gap * (columns - 1)) / columns
+        val cellHeight = (area.height() - gap * (rows - 1)) / rows
+        return List(count) { index ->
+            val row = index / columns
+            val column = index % columns
+            val alone = columns > 1 && index == count - 1 && count % columns == 1
+            val left = area.left + column * (cellWidth + gap)
+            val top = area.top + row * (cellHeight + gap)
+            Rect(left, top, left + if (alone) area.width() else cellWidth, top + cellHeight)
+        }
+    }
+
+    // ---- rendering (main thread only)
+
+    private fun overlayParams(width: Int, height: Int, x: Int, y: Int) = WindowManager.LayoutParams(
+        width, height,
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PixelFormat.TRANSLUCENT
+    ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        this.x = x
+        this.y = y
+    }
+
+    /** Updates views in place so a dragged bubble keeps its position when state changes. */
+    private fun render() {
+        val current = manager.snapshot()
+        val live = current.map { it.pkg }.toSet()
+        handles.keys.filter { it !in live }.forEach { removeHandle(it) }
+
+        current.forEachIndexed { index, bubble ->
+            val handle = handles[bubble.pkg]
+                ?: createBubble(bubble.pkg, index)?.also { handles[bubble.pkg] = it }
+                ?: return@forEachIndexed
+            handle.icon.setBackgroundResource(
+                if (bubble.expanded) R.drawable.bg_bubble_active else R.drawable.bg_bubble
+            )
+        }
+        ensureChip()
+    }
+
+    private fun positionFor(key: String, fallback: Point): Point = positions.getOrPut(key) {
+        val saved = positionPrefs.getString(key, null)?.split(",")
+        val x = saved?.getOrNull(0)?.toIntOrNull()
+        val y = saved?.getOrNull(1)?.toIntOrNull()
+        if (x != null && y != null) clampToScreen(Point(x, y)) else fallback
+    }
+
+    private fun clampToScreen(point: Point): Point {
+        val metrics = resources.displayMetrics
+        val size = dp(BUBBLE_DP)
+        return Point(point.x.coerceIn(0, metrics.widthPixels - size), point.y.coerceIn(0, metrics.heightPixels - size))
+    }
+
+    private fun savePosition(key: String, point: Point) {
+        positions[key] = point
+        positionPrefs.edit().putString(key, "${point.x},${point.y}").apply()
+    }
+
+    private fun createBubble(pkg: String, index: Int): BubbleHandle? {
+        val root = LayoutInflater.from(themed).inflate(R.layout.view_bubble, null)
+        val icon = root.findViewById<ImageView>(R.id.bubble_icon)
+        icon.setImageDrawable(runCatching { packageManager.getApplicationIcon(pkg) }.getOrNull())
+        root.contentDescription = getString(R.string.cd_bubble, labelOf(pkg))
+
+        val size = dp(BUBBLE_DP)
+        val screen = resources.displayMetrics
+        val position = positionFor(pkg, Point(screen.widthPixels - size, dp(FIRST_SLOT_TOP_DP) + index * dp(SLOT_STEP_DP)))
+        val params = overlayParams(size, size, position.x, position.y)
+        attachDrag(root, params, pkg, closable = true, onTap = { onBubbleTap(pkg) })
+        return try {
+            popIn(root)
+            wm.addView(root, params)
+            BubbleHandle(root, icon, params)
+        } catch (e: Exception) {
+            DiagLog.log(TAG, "Could not show bubble for $pkg: ${e.message}")
+            null
+        }
+    }
+
+    private fun removeHandle(pkg: String) {
+        handles.remove(pkg)?.let { popOutAndRemove(it.root) }
+        positions.remove(pkg)
+        positionPrefs.edit().remove(pkg).apply()
+    }
+
+    private fun labelOf(pkg: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+
+    // ---- animations
+
+    private fun popIn(view: View) {
+        view.scaleX = 0f
+        view.scaleY = 0f
+        view.post {
+            view.animate().scaleX(1f).scaleY(1f).setDuration(260)
+                .setInterpolator(OvershootInterpolator(1.4f)).start()
+        }
+    }
+
+    private fun popOutAndRemove(view: View) {
+        view.animate().scaleX(0f).scaleY(0f).alpha(0f).setDuration(160)
+            .withEndAction { runCatching { wm.removeView(view) } }.start()
+    }
+
+    // ---- drag, tap, long press and drop-to-close
+
+    private fun attachDrag(
+        view: View,
+        params: WindowManager.LayoutParams,
+        key: String,
+        closable: Boolean,
+        onTap: () -> Unit,
+        onLongPress: (() -> Unit)? = null
+    ) {
+        val slop = ViewConfiguration.get(this).scaledTouchSlop
+        var startX = 0
+        var startY = 0
+        var downX = 0f
+        var downY = 0f
+        var dragging = false
+        var longPressed = false
+        val longPressCheck = Runnable {
+            if (!dragging) {
+                longPressed = true
+                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                onLongPress?.invoke()
+            }
+        }
+
+        view.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = params.x
+                    startY = params.y
+                    downX = event.rawX
+                    downY = event.rawY
+                    dragging = false
+                    longPressed = false
+                    if (onLongPress != null) {
+                        ui.postDelayed(longPressCheck, ViewConfiguration.getLongPressTimeout().toLong())
+                    }
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (!dragging && !longPressed && hypot(dx, dy) > slop) {
+                        dragging = true
+                        ui.removeCallbacks(longPressCheck)
+                        if (closable) showCloseZone()
+                    }
+                    if (dragging) {
+                        params.x = startX + dx.toInt()
+                        params.y = startY + dy.toInt()
+                        runCatching { wm.updateViewLayout(view, params) }
+                        if (closable) setCloseHot(isOverClose(event.rawX, event.rawY))
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    ui.removeCallbacks(longPressCheck)
+                    when {
+                        longPressed -> Unit
+                        !dragging -> onTap()
+                        else -> {
+                            val dropped = closable && isOverClose(event.rawX, event.rawY)
+                            hideCloseZone()
+                            if (dropped) closeBubble(key) else snapToEdge(view, params, key)
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    ui.removeCallbacks(longPressCheck)
+                    hideCloseZone()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun snapToEdge(view: View, params: WindowManager.LayoutParams, key: String) {
+        val screen = resources.displayMetrics
+        val targetX = if (params.x + params.width / 2 < screen.widthPixels / 2) 0 else screen.widthPixels - params.width
+        val targetY = params.y.coerceIn(0, screen.heightPixels - params.height)
+        savePosition(key, Point(targetX, targetY))
+        val fromX = params.x
+        val fromY = params.y
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 180
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                params.x = (fromX + (targetX - fromX) * t).toInt()
+                params.y = (fromY + (targetY - fromY) * t).toInt()
+                runCatching { wm.updateViewLayout(view, params) }
+            }
+            start()
+        }
+    }
+
+    private fun closeZoneTop(): Int =
+        resources.displayMetrics.heightPixels - dp(CLOSE_ZONE_DP) - dp(CLOSE_ZONE_BOTTOM_DP)
+
+    private fun isOverClose(rawX: Float, rawY: Float): Boolean {
+        val centerX = resources.displayMetrics.widthPixels / 2f
+        val centerY = closeZoneTop() + dp(CLOSE_ZONE_DP) / 2f
+        return hypot(rawX - centerX, rawY - centerY) < dp(CLOSE_HIT_RADIUS_DP)
+    }
+
+    private fun showCloseZone() {
+        if (closeZone != null) return
+        val view = LayoutInflater.from(themed).inflate(R.layout.view_close_zone, null)
+        val size = dp(CLOSE_ZONE_DP)
+        val x = (resources.displayMetrics.widthPixels - size) / 2
+        view.alpha = 0f
+        view.scaleX = 0.6f
+        view.scaleY = 0.6f
+        runCatching { wm.addView(view, overlayParams(size, size, x, closeZoneTop())) }
+            .onSuccess {
+                closeZone = view
+                view.post { view.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start() }
+            }
+    }
+
+    private fun setCloseHot(hot: Boolean) {
+        val zone = closeZone ?: return
+        zone.findViewById<View>(R.id.close_bg).setBackgroundResource(
+            if (hot) R.drawable.bg_close_zone_hot else R.drawable.bg_close_zone
+        )
+        val iconAttr = if (hot) {
+            com.google.android.material.R.attr.colorOnError
+        } else {
+            com.google.android.material.R.attr.colorOnErrorContainer
+        }
+        zone.findViewById<ImageView>(R.id.close_icon).imageTintList =
+            ColorStateList.valueOf(MaterialColors.getColor(themed, iconAttr, 0))
+        val scale = if (hot) 1.2f else 1f
+        zone.animate().scaleX(scale).scaleY(scale).setDuration(100).start()
+    }
+
+    private fun hideCloseZone() {
+        val zone = closeZone ?: return
+        closeZone = null
+        zone.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(120)
+            .withEndAction { runCatching { wm.removeView(zone) } }.start()
+    }
+
+    // ---- chip: movable app drawer button, long press arranges windows
+
+    private fun ensureChip() {
+        if (chip != null) return
+        val root = LayoutInflater.from(themed).inflate(R.layout.view_bubble, null)
+        val icon = root.findViewById<ImageView>(R.id.bubble_icon)
+        icon.setImageResource(R.drawable.ic_apps)
+        root.contentDescription = getString(R.string.cd_drawer)
+
+        val size = dp(BUBBLE_DP)
+        val screen = resources.displayMetrics
+        val position = positionFor(
+            CHIP_KEY,
+            Point(screen.widthPixels - size, dp(FIRST_SLOT_TOP_DP) + BubbleManager.MAX_BUBBLES * dp(SLOT_STEP_DP))
+        )
+        val params = overlayParams(size, size, position.x, position.y)
+        attachDrag(
+            root, params, CHIP_KEY, closable = false,
+            onTap = { toggleDrawer() },
+            onLongPress = { toggleArrange() }
+        )
+        try {
+            popIn(root)
+            wm.addView(root, params)
+            chip = BubbleHandle(root, icon, params)
+            styleChip()
+        } catch (e: Exception) {
+            DiagLog.log(TAG, "Could not show the chip: ${e.message}")
+        }
+    }
+
+    private fun styleChip() {
+        val icon = chip?.icon ?: return
+        icon.setBackgroundResource(if (arranging) R.drawable.bg_chip_active else R.drawable.bg_chip)
+        val attr = if (arranging) {
+            com.google.android.material.R.attr.colorOnPrimary
+        } else {
+            com.google.android.material.R.attr.colorOnSecondaryContainer
+        }
+        icon.imageTintList = ColorStateList.valueOf(MaterialColors.getColor(themed, attr, 0))
+    }
+
+    // ---- app drawer (our own overlay, because a service cannot show a bottom sheet)
+
+    private fun toggleDrawer() = if (drawer == null) showDrawer() else hideDrawer()
+
+    private fun showDrawer() {
+        val view = LayoutInflater.from(themed).inflate(R.layout.view_app_drawer, null)
+        val adapter = AppListAdapter { entry ->
+            hideDrawer()
+            openBubble(entry.packageName)
+        }
+        view.findViewById<RecyclerView>(R.id.list).apply {
+            layoutManager = LinearLayoutManager(themed)
+            this.adapter = adapter
+        }
+        view.findViewById<EditText>(R.id.search)
+            .doAfterTextChanged { adapter.filter(it?.toString().orEmpty()) }
+        view.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                hideDrawer()
+                true
+            } else {
+                false
+            }
+        }
+
+        val screen = resources.displayMetrics
+        val params = WindowManager.LayoutParams(
+            minOf(dp(DRAWER_MAX_WIDTH_DP), (screen.widthPixels * 0.92f).toInt()),
+            (screen.heightPixels * 0.62f).toInt(),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            // Focusable so the search field can open the keyboard.
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.CENTER
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+        }
+        view.alpha = 0f
+        view.translationY = dp(24).toFloat()
+        try {
+            wm.addView(view, params)
+        } catch (e: Exception) {
+            DiagLog.log(TAG, "Could not open the app drawer: ${e.message}")
+            return
+        }
+        drawer = view
+        view.post {
+            view.animate().alpha(1f).translationY(0f).setDuration(220)
+                .setInterpolator(DecelerateInterpolator()).start()
+        }
+
+        val recents = manager.recentsSnapshot()
+        thread {
+            val apps = AppList.load(this, recents)
+            ui.post { adapter.submit(apps) }
+        }
+    }
+
+    private fun hideDrawer() {
+        val view = drawer ?: return
+        drawer = null
+        view.animate().alpha(0f).translationY(dp(24).toFloat()).setDuration(160)
+            .withEndAction { runCatching { wm.removeView(view) } }.start()
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/ui/AppList.kt =====
+package com.multitask.bubble.ui
+
+import android.content.Context
+import android.content.Intent
+import android.graphics.drawable.Drawable
+import android.view.LayoutInflater
+import android.view.ViewGroup
+import androidx.recyclerview.widget.RecyclerView
+import com.multitask.bubble.R
+import com.multitask.bubble.databinding.ItemAppBinding
+
+class AppEntry(
+    val packageName: String,
+    val label: String,
+    val icon: Drawable,
+    val recent: Boolean
+)
+
+object AppList {
+    /** Every launchable app. Recent bubbles come first, the rest are alphabetical. Blocking. */
+    fun load(context: Context, recents: List<String>): List<AppEntry> {
+        val pm = context.packageManager
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val all = pm.queryIntentActivities(launcher, 0)
+            .filter { it.activityInfo.packageName != context.packageName }
+            .distinctBy { it.activityInfo.packageName }
+            .map {
+                val pkg = it.activityInfo.packageName
+                AppEntry(pkg, it.loadLabel(pm).toString(), it.loadIcon(pm), pkg in recents)
+            }
+        val recentFirst = recents.mapNotNull { pkg -> all.firstOrNull { it.packageName == pkg } }
+        val rest = all.filter { !it.recent }.sortedBy { it.label.lowercase() }
+        return recentFirst + rest
+    }
+}
+
+class AppListAdapter(
+    private val onClick: (AppEntry) -> Unit
+) : RecyclerView.Adapter<AppListAdapter.Holder>() {
+
+    class Holder(val binding: ItemAppBinding) : RecyclerView.ViewHolder(binding.root)
+
+    private var all: List<AppEntry> = emptyList()
+    private var shown: List<AppEntry> = emptyList()
+    private var query = ""
+
+    fun submit(items: List<AppEntry>) {
+        all = items
+        filter(query)
+    }
+
+    fun filter(text: String) {
+        query = text
+        shown = if (text.isBlank()) all else all.filter { it.label.contains(text, ignoreCase = true) }
+        notifyDataSetChanged()
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
+        Holder(ItemAppBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+
+    override fun getItemCount() = shown.size
+
+    override fun onBindViewHolder(holder: Holder, position: Int) {
+        val entry = shown[position]
+        val context = holder.binding.root.context
+        holder.binding.appIcon.setImageDrawable(entry.icon)
+        holder.binding.appLabel.text = entry.label
+        holder.binding.appPackage.text =
+            if (entry.recent) context.getString(R.string.recent_label) else entry.packageName
+        holder.binding.root.setOnClickListener { onClick(entry) }
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/ui/AppPickerSheet.kt =====
+package com.multitask.bubble.ui
+
+import android.view.LayoutInflater
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.doAfterTextChanged
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.multitask.bubble.databinding.SheetAppPickerBinding
+import kotlin.concurrent.thread
+
+/** Bottom sheet listing launchable apps with a search field. Used from the main screen. */
+class AppPickerSheet(
+    private val activity: AppCompatActivity,
+    private val onPick: (packageName: String) -> Unit
+) {
+    fun show() {
+        val dialog = BottomSheetDialog(activity)
+        val binding = SheetAppPickerBinding.inflate(LayoutInflater.from(activity))
+        val adapter = AppListAdapter { entry ->
+            dialog.dismiss()
+            onPick(entry.packageName)
+        }
+        binding.list.layoutManager = LinearLayoutManager(activity)
+        binding.list.adapter = adapter
+        binding.search.doAfterTextChanged { adapter.filter(it?.toString().orEmpty()) }
+
+        dialog.setContentView(binding.root)
+        dialog.behavior.skipCollapsed = true
+        dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
+        dialog.show()
+
+        thread {
+            val apps = AppList.load(activity, emptyList())
+            activity.runOnUiThread { adapter.submit(apps) }
+        }
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/ui/BubbleWindow.kt =====
+package com.multitask.bubble.ui
+
+import android.graphics.Rect
+
+/** The window an app lives in while it is a bubble. Main thread only. */
+interface BubbleWindow {
+    /** Brings the app on screen. */
+    fun show()
+
+    /** Takes the app off screen but keeps it running. */
+    fun hide()
+
+    /** Closes the app and frees everything. */
+    fun release()
+
+    /** Places and sizes the window. Applied on the next [show] if the window is hidden. */
+    fun setBounds(bounds: Rect, animate: Boolean) {}
+
+    /** Puts the window above the other windows. */
+    fun raise() {}
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/ui/EmbeddedWindow.kt =====
+package com.multitask.bubble.ui
+
+import android.animation.ValueAnimator
+import android.content.Context
+import android.graphics.PixelFormat
+import android.graphics.Point
+import android.graphics.Rect
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.View
+import android.view.ViewConfiguration
+import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.core.animation.doOnEnd
+import com.multitask.bubble.R
+import com.multitask.bubble.core.DiagLog
+import com.multitask.bubble.core.WindowBackend
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import kotlin.math.abs
+
+/**
+ * The real bubble: the app runs on a private virtual display and its pixels are drawn into a
+ * SurfaceView inside our own overlay window. We own the frame, so minimize, close, move and
+ * resize are real. Needs only the public DisplayManager API plus Shizuku for launching the app
+ * and injecting input.
+ *
+ * [onFailed] fires once if the device cannot run apps on a secondary display, so the caller can
+ * switch to the freeform fallback. [onFocus] fires when the title bar is tapped. [onDragEnd]
+ * fires with the window center when the title bar was dragged and released.
+ */
+class EmbeddedWindow(
+    private val context: Context,
+    private val wm: WindowManager,
+    private val backend: WindowBackend,
+    private val worker: Executor,
+    private val pkg: String,
+    private val onMinimize: () -> Unit,
+    private val onClose: () -> Unit,
+    private val onFailed: () -> Unit,
+    private val onFocus: () -> Unit,
+    private val onDragEnd: (centerX: Int, centerY: Int) -> Unit
+) : BubbleWindow, SurfaceHolder.Callback {
+
+    private companion object {
+        const val TAG = "EmbeddedWindow"
+        const val FLAG_SUPPORTS_TOUCH = 1 shl 6 // hidden DisplayManager flag
+        const val WIDTH_FRACTION = 0.8f
+        const val HEIGHT_FRACTION = 0.6f
+        const val TITLE_DP = 52
+        const val MIN_SURFACE_DP = 120
+        const val SLIDE_DP = 16
+        const val ENTER_MS = 220L
+        const val EXIT_MS = 150L
+        const val MOVE_MS = 280L
+    }
+
+    private val ui = Handler(Looper.getMainLooper())
+    private val metrics = context.resources.displayMetrics
+    private fun dp(value: Int) = (value * metrics.density).toInt()
+
+    private var surfaceWidth = (metrics.widthPixels * WIDTH_FRACTION).toInt()
+    private var surfaceHeight = (metrics.heightPixels * HEIGHT_FRACTION).toInt()
+    private val position = Point((metrics.widthPixels * 0.04f).toInt(), (metrics.heightPixels * 0.1f).toInt())
+    private val input = Executors.newSingleThreadExecutor()
+
+    private var root: View? = null
+    private var windowParams: WindowManager.LayoutParams? = null
+    private var activeHolder: SurfaceHolder? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    private var displayId = -1
+    private var downTime = 0L
+    private var released = false
+    private var failed = false
+    private var enterAnimator: ValueAnimator? = null
+    private var moveAnimator: ValueAnimator? = null
+
+    // ---- BubbleWindow
+
+    override fun show() = attach(animated = true)
+
+    override fun hide() = detach(animated = true)
+
+    override fun release() {
+        released = true
+        detach(animated = true)
+        val display = virtualDisplay
+        virtualDisplay = null
+        displayId = -1
+        input.shutdown()
+        worker.execute {
+            // Stop the app first, otherwise Android moves it to the main screen when the display goes.
+            backend.close(pkg)
+            Thread.sleep(250)
+            display?.release()
+        }
+    }
+
+    override fun raise() {
+        if (root == null || released) return
+        detach(animated = false)
+        attach(animated = false)
+    }
+
+    override fun setBounds(bounds: Rect, animate: Boolean) {
+        surfaceWidth = bounds.width().coerceAtLeast(dp(MIN_SURFACE_DP))
+        surfaceHeight = (bounds.height() - dp(TITLE_DP)).coerceAtLeast(dp(MIN_SURFACE_DP))
+        virtualDisplay?.resize(surfaceWidth, surfaceHeight, metrics.densityDpi)
+
+        val view = root
+        val params = windowParams
+        if (view == null || params == null) {
+            position.set(bounds.left, bounds.top)
+            return
+        }
+        val surface = view.findViewById<SurfaceView>(R.id.surface)
+        surface.layoutParams = surface.layoutParams.apply {
+            width = surfaceWidth
+            height = surfaceHeight
+        }
+        moveAnimator?.cancel()
+        if (!animate) {
+            params.x = bounds.left
+            params.y = bounds.top
+            position.set(params.x, params.y)
+            runCatching { wm.updateViewLayout(view, params) }
+            return
+        }
+        val fromX = params.x
+        val fromY = params.y
+        moveAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = MOVE_MS
+            interpolator = DecelerateInterpolator(1.5f)
+            addUpdateListener {
+                if (root !== view) return@addUpdateListener
+                val t = it.animatedValue as Float
+                params.x = (fromX + (bounds.left - fromX) * t).toInt()
+                params.y = (fromY + (bounds.top - fromY) * t).toInt()
+                position.set(params.x, params.y)
+                runCatching { wm.updateViewLayout(view, params) }
+            }
+            start()
+        }
+    }
+
+    // ---- window
+
+    private fun attach(animated: Boolean) {
+        if (root != null || released) return
+        val view = LayoutInflater.from(context).inflate(R.layout.view_embedded_window, null)
+
+        val surface = view.findViewById<SurfaceView>(R.id.surface)
+        surface.layoutParams = surface.layoutParams.apply {
+            width = surfaceWidth
+            height = surfaceHeight
+        }
+        surface.holder.addCallback(this)
+        surface.setOnTouchListener { _, event ->
+            forward(event)
+            true
+        }
+
+        val pm = context.packageManager
+        view.findViewById<TextView>(R.id.title_text).text = runCatching {
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrDefault(pkg)
+        view.findViewById<ImageView>(R.id.title_icon)
+            .setImageDrawable(runCatching { pm.getApplicationIcon(pkg) }.getOrNull())
+        view.findViewById<View>(R.id.btn_back).setOnClickListener { sendKey(KeyEvent.KEYCODE_BACK) }
+        view.findViewById<View>(R.id.btn_minimize).setOnClickListener { onMinimize() }
+        view.findViewById<View>(R.id.btn_close).setOnClickListener { onClose() }
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = position.x
+            y = position.y + if (animated) dp(SLIDE_DP) else 0
+            alpha = if (animated) 0f else 1f
+        }
+        attachTitleDrag(view.findViewById(R.id.title_bar), view, params)
+
+        try {
+            wm.addView(view, params)
+            root = view
+            windowParams = params
+        } catch (e: Exception) {
+            DiagLog.log(TAG, "Could not show window for $pkg: ${e.message}")
+            return
+        }
+        if (animated) animateEnter(view, params)
+    }
+
+    private fun animateEnter(view: View, params: WindowManager.LayoutParams) {
+        enterAnimator?.cancel()
+        enterAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = ENTER_MS
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                if (root !== view) return@addUpdateListener
+                val t = it.animatedValue as Float
+                params.alpha = t
+                params.y = position.y + ((1f - t) * dp(SLIDE_DP)).toInt()
+                runCatching { wm.updateViewLayout(view, params) }
+            }
+            start()
+        }
+    }
+
+    private fun detach(animated: Boolean) {
+        val view = root ?: return
+        val params = windowParams
+        root = null
+        windowParams = null
+        enterAnimator?.cancel()
+        moveAnimator?.cancel()
+
+        fun finish() {
+            runCatching { wm.removeView(view) }
+            // Pause drawing, unless a new window already took over.
+            if (root == null) virtualDisplay?.surface = null
+        }
+        if (!animated || params == null) {
+            finish()
+            return
+        }
+        ValueAnimator.ofFloat(1f, 0f).apply {
+            duration = EXIT_MS
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                params.alpha = t
+                params.y = position.y + ((1f - t) * dp(SLIDE_DP)).toInt()
+                runCatching { wm.updateViewLayout(view, params) }
+            }
+            doOnEnd { finish() }
+            start()
+        }
+    }
+
+    // ---- surface lifecycle
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        activeHolder = holder
+        val existing = virtualDisplay
+        if (existing != null) {
+            existing.surface = holder.surface
+            return
+        }
+        val manager = context.getSystemService(DisplayManager::class.java)
+        val base = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+        val created = runCatching {
+            manager.createVirtualDisplay(
+                "bubble-$pkg", surfaceWidth, surfaceHeight, metrics.densityDpi,
+                holder.surface, base or FLAG_SUPPORTS_TOUCH
+            )
+        }.recoverCatching {
+            manager.createVirtualDisplay(
+                "bubble-$pkg", surfaceWidth, surfaceHeight, metrics.densityDpi, holder.surface, base
+            )
+        }.onFailure { DiagLog.log(TAG, "Virtual display failed: ${it.message}") }.getOrNull()
+
+        if (created == null) {
+            fail()
+            return
+        }
+        virtualDisplay = created
+        displayId = created.display.displayId
+        DiagLog.log(TAG, "$pkg runs on virtual display $displayId (${surfaceWidth}x$surfaceHeight)")
+        val id = displayId
+        worker.execute {
+            if (!backend.launchOnDisplay(pkg, id)) ui.post { fail() }
+        }
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        // An old window can be destroyed after a new one took over, so only react to the active one.
+        if (holder === activeHolder) {
+            activeHolder = null
+            virtualDisplay?.surface = null
+        }
+    }
+
+    private fun fail() {
+        if (failed || released) return
+        failed = true
+        DiagLog.log(TAG, "Embedding is not supported here, switching to freeform windows")
+        onFailed()
+    }
+
+    // ---- input
+
+    /** Forwards every pointer, so pinch-to-zoom, double tap and flings reach the app unchanged. */
+    private fun forward(event: MotionEvent) {
+        val id = displayId
+        if (id <= 0) return
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> downTime = SystemClock.uptimeMillis()
+            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL,
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> Unit
+            else -> return
+        }
+        val count = event.pointerCount
+        val ids = IntArray(count) { event.getPointerId(it) }
+        val xs = FloatArray(count) { event.getX(it) }
+        val ys = FloatArray(count) { event.getY(it) }
+        val action = event.action // keeps the pointer index for POINTER_DOWN/UP
+        val time = downTime
+        runCatching { input.execute { backend.injectTouch(id, action, time, ids, xs, ys) } }
+    }
+
+    private fun sendKey(keyCode: Int) {
+        val id = displayId
+        if (id <= 0) return
+        runCatching { input.execute { backend.injectKey(id, keyCode) } }
+    }
+
+    private fun attachTitleDrag(handle: View, window: View, params: WindowManager.LayoutParams) {
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        var startX = 0
+        var startY = 0
+        var downX = 0f
+        var downY = 0f
+        var moved = false
+        handle.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    moveAnimator?.cancel()
+                    startX = params.x
+                    startY = params.y
+                    downX = event.rawX
+                    downY = event.rawY
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - downX).toInt()
+                    val dy = (event.rawY - downY).toInt()
+                    if (moved || abs(dx) > slop || abs(dy) > slop) {
+                        moved = true
+                        params.x = startX + dx
+                        params.y = startY + dy
+                        position.set(params.x, params.y)
+                        runCatching { wm.updateViewLayout(window, params) }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (moved) {
+                        onDragEnd(params.x + surfaceWidth / 2, params.y + (surfaceHeight + dp(TITLE_DP)) / 2)
+                    } else {
+                        onFocus()
+                    }
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/java/com/multitask/bubble/ui/FreeformWindow.kt =====
+package com.multitask.bubble.ui
+
+import android.content.Context
+import android.graphics.Rect
+import com.multitask.bubble.core.WindowBackend
+import java.util.concurrent.Executor
+
+/**
+ * Fallback for devices that cannot run apps on a secondary display. The system draws the window,
+ * we only place it. Hiding moves it off screen, which some ROMs may ignore.
+ */
+class FreeformWindow(
+    context: Context,
+    private val backend: WindowBackend,
+    private val worker: Executor,
+    private val pkg: String
+) : BubbleWindow {
+
+    private val offscreen = Rect(-3000, -3000, -2000, -2000)
+
+    @Volatile
+    private var bounds: Rect
+
+    @Volatile
+    private var taskId = -1
+
+    init {
+        val metrics = context.resources.displayMetrics
+        val w = metrics.widthPixels
+        val h = metrics.heightPixels
+        bounds = Rect((w * 0.08).toInt(), (h * 0.12).toInt(), (w * 0.92).toInt(), (h * 0.72).toInt())
+    }
+
+    override fun show() {
+        val target = bounds
+        // Launching again reuses the existing task and brings it to the front.
+        worker.execute {
+            val id = backend.launchFreeform(pkg, target)
+            if (id > 0) taskId = id
+        }
+    }
+
+    override fun hide() {
+        worker.execute { if (taskId > 0) backend.moveTask(taskId, offscreen) }
+    }
+
+    override fun release() {
+        worker.execute { backend.close(pkg) }
+    }
+
+    override fun setBounds(bounds: Rect, animate: Boolean) {
+        this.bounds = Rect(bounds)
+        val target = this.bounds
+        worker.execute { if (taskId > 0) backend.moveTask(taskId, target) }
+    }
+}
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/bg_bubble.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="?attr/colorSurfaceContainerHigh" />
+    <stroke android:width="1dp" android:color="?attr/colorOutlineVariant" />
+</shape>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/bg_bubble_active.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="?attr/colorPrimaryContainer" />
+    <stroke android:width="3dp" android:color="?attr/colorPrimary" />
+</shape>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/bg_chip.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="?attr/colorSecondaryContainer" />
+</shape>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/bg_chip_active.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="?attr/colorPrimary" />
+</shape>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/bg_close_zone.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="?attr/colorErrorContainer" />
+</shape>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/bg_close_zone_hot.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="?attr/colorError" />
+</shape>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/bg_log.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="?attr/colorSurfaceContainerLowest" />
+    <corners android:radius="16dp" />
+</shape>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_add.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_apps.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M4,8h4V4H4v4zM10,20h4v-4h-4v4zM4,20h4v-4H4v4zM4,14h4v-4H4v4zM10,14h4v-4h-4v4zM16,4v4h4V4h-4zM10,8h4V4h-4v4zM16,14h4v-4h-4v4zM16,20h4v-4h-4v4z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_back.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_bubble.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M20,2H4c-1.1,0 -2,0.9 -2,2v18l4,-4h14c1.1,0 2,-0.9 2,-2V4c0,-1.1 -0.9,-2 -2,-2z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_check_circle.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM10,17l-5,-5 1.41,-1.41L10,14.17l7.59,-7.59L19,8l-9,9z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_close.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_copy.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M16,1H4C2.9,1 2,1.9 2,3v14h2V3h12V1zM19,5H8C6.9,5 6,5.9 6,7v14c0,1.1 0.9,2 2,2h11c1.1,0 2,-0.9 2,-2V7C21,5.9 20.1,5 19,5zM19,21H8V7h11V21z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_error.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM13,17h-2v-2h2v2zM13,13h-2L11,7h2v6z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_launcher_background.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#006A6A"
+        android:pathData="M0,0h108v108h-108z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_launcher_foreground.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Big bubble -->
+    <path
+        android:fillColor="#F4FBFA"
+        android:pathData="M48,58m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0" />
+    <!-- Small bubble -->
+    <path
+        android:fillColor="#6FF7F6"
+        android:pathData="M70,38m-9,0a9,9 0,1 1,18 0a9,9 0,1 1,-18 0" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_minimize.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M19,13H5v-2h14v2z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_play.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M8,5v14l11,-7z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/drawable/ic_stop.xml =====
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M6,6h12v12H6z" />
+</vector>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/activity_main.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurface"
+    android:clipToPadding="false"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:id="@+id/content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingTop="24dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textAppearance="?attr/textAppearanceDisplaySmall"
+            android:textColor="?attr/colorOnSurface"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="24dp"
+            android:text="@string/tagline"
+            android:textAppearance="?attr/textAppearanceBodyLarge"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+
+        <!-- Status -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginBottom="8dp"
+            android:text="@string/section_status"
+            android:textAppearance="?attr/textAppearanceLabelLarge"
+            android:textColor="?attr/colorPrimary" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+            app:shapeAppearance="@style/ShapeAppearance.Material3.Corner.ExtraLarge">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp">
+
+                <include
+                    android:id="@+id/row_shizuku"
+                    layout="@layout/view_status_row" />
+
+                <include
+                    android:id="@+id/row_overlay"
+                    layout="@layout/view_status_row" />
+
+                <include
+                    android:id="@+id/row_service"
+                    layout="@layout/view_status_row" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Bubbles -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="8dp"
+            android:text="@string/section_bubbles"
+            android:textAppearance="?attr/textAppearanceLabelLarge"
+            android:textColor="?attr/colorPrimary" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_start"
+            style="@style/Widget.Material3.Button.Icon"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:text="@string/action_start"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            app:cornerRadius="32dp"
+            app:icon="@drawable/ic_play" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_add"
+                style="@style/Widget.Material3.Button.TonalButton.Icon"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="@string/action_add"
+                app:cornerRadius="28dp"
+                app:icon="@drawable/ic_add" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_stop"
+                style="@style/Widget.Material3.Button.OutlinedButton.Icon"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:text="@string/action_stop"
+                app:cornerRadius="28dp"
+                app:icon="@drawable/ic_stop" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txt_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="12dp"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+
+        <!-- Diagnostics -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="8dp"
+            android:text="@string/section_diag"
+            android:textAppearance="?attr/textAppearanceLabelLarge"
+            android:textColor="?attr/colorPrimary" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="?attr/colorSurfaceContainer"
+            app:shapeAppearance="@style/ShapeAppearance.Material3.Corner.ExtraLarge">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_clear"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/diag_clear" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_copy"
+                        style="@style/Widget.Material3.Button.TextButton.Icon"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/diag_copy"
+                        app:icon="@drawable/ic_copy" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/txt_log"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_log"
+                    android:fontFamily="monospace"
+                    android:padding="14dp"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:textIsSelectable="true" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/item_app.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:clickable="true"
+    android:focusable="true"
+    android:gravity="center_vertical"
+    android:minHeight="64dp"
+    android:orientation="horizontal"
+    android:paddingStart="12dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="8dp">
+
+    <ImageView
+        android:id="@+id/app_icon"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:importantForAccessibility="no" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/app_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textAppearance="?attr/textAppearanceBodyLarge"
+            android:textColor="?attr/colorOnSurface" />
+
+        <TextView
+            android:id="@+id/app_package"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+    </LinearLayout>
+</LinearLayout>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/sheet_app_picker.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="16dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="8dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="12dp"
+        android:text="@string/picker_title"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        android:textColor="?attr/colorOnSurface" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        style="@style/Widget.Material3.TextInputLayout.FilledBox"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/picker_search"
+        app:boxBackgroundColor="?attr/colorSurfaceContainerHigh"
+        app:boxCornerRadiusBottomEnd="28dp"
+        app:boxCornerRadiusBottomStart="28dp"
+        app:boxCornerRadiusTopEnd="28dp"
+        app:boxCornerRadiusTopStart="28dp"
+        app:boxStrokeWidth="0dp"
+        app:boxStrokeWidthFocused="0dp">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/search"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:imeOptions="actionSearch"
+            android:inputType="text"
+            android:maxLines="1" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/list"
+        android:layout_width="match_parent"
+        android:layout_height="420dp"
+        android:layout_marginTop="8dp"
+        android:clipToPadding="false" />
+</LinearLayout>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/view_app_drawer.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    style="@style/Widget.Material3.CardView.Elevated"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+    app:shapeAppearance="@style/ShapeAppearance.Material3.Corner.ExtraLarge">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingTop="12dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="12dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="8dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="12dp"
+            android:text="@string/picker_title"
+            android:textAppearance="?attr/textAppearanceHeadlineSmall"
+            android:textColor="?attr/colorOnSurface" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.Material3.TextInputLayout.FilledBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/picker_search"
+            app:boxBackgroundColor="?attr/colorSurfaceContainerHighest"
+            app:boxCornerRadiusBottomEnd="28dp"
+            app:boxCornerRadiusBottomStart="28dp"
+            app:boxCornerRadiusTopEnd="28dp"
+            app:boxCornerRadiusTopStart="28dp"
+            app:boxStrokeWidth="0dp"
+            app:boxStrokeWidthFocused="0dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/search"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:imeOptions="actionSearch"
+                android:inputType="text"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/list"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="8dp"
+            android:layout_weight="1"
+            android:clipToPadding="false" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/view_bubble.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="56dp"
+    android:layout_height="56dp">
+
+    <ImageView
+        android:id="@+id/bubble_icon"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="center"
+        android:background="@drawable/bg_bubble"
+        android:clipToOutline="true"
+        android:elevation="6dp"
+        android:padding="9dp"
+        android:scaleType="fitCenter" />
+</FrameLayout>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/view_close_zone.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="80dp"
+    android:layout_height="80dp"
+    android:contentDescription="@string/cd_close_zone">
+
+    <FrameLayout
+        android:id="@+id/close_bg"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:layout_gravity="center"
+        android:background="@drawable/bg_close_zone"
+        android:elevation="6dp">
+
+        <ImageView
+            android:id="@+id/close_icon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_gravity="center"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_close" />
+    </FrameLayout>
+</FrameLayout>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/view_embedded_window.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    style="@style/Widget.Material3.CardView.Elevated"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+    app:shapeAppearance="@style/ShapeAppearance.Material3.Corner.ExtraLarge">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/title_bar"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="8dp">
+
+            <ImageView
+                android:id="@+id/title_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/title_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="?attr/textAppearanceTitleMedium"
+                android:textColor="?attr/colorOnSurface" />
+
+            <ImageButton
+                android:id="@+id/btn_back"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/cd_back"
+                android:src="@drawable/ic_back"
+                android:tint="?attr/colorOnSurfaceVariant" />
+
+            <ImageButton
+                android:id="@+id/btn_minimize"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/cd_minimize"
+                android:src="@drawable/ic_minimize"
+                android:tint="?attr/colorOnSurfaceVariant" />
+
+            <ImageButton
+                android:id="@+id/btn_close"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/cd_close"
+                android:src="@drawable/ic_close"
+                android:tint="?attr/colorOnSurfaceVariant" />
+        </LinearLayout>
+
+        <SurfaceView
+            android:id="@+id/surface"
+            android:layout_width="1dp"
+            android:layout_height="1dp" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/layout/view_status_row.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:gravity="center_vertical"
+    android:minHeight="64dp"
+    android:orientation="horizontal"
+    android:paddingStart="20dp"
+    android:paddingTop="12dp"
+    android:paddingEnd="20dp"
+    android:paddingBottom="12dp">
+
+    <ImageView
+        android:id="@+id/icon"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:importantForAccessibility="no" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceBodyLarge"
+            android:textColor="?attr/colorOnSurface" />
+
+        <TextView
+            android:id="@+id/detail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+    </LinearLayout>
+</LinearLayout>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/values-night/colors.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Teal tonal palette (Material 3), dark scheme. -->
+<resources>
+    <color name="md_primary">#4CDADA</color>
+    <color name="md_on_primary">#003737</color>
+    <color name="md_primary_container">#004F4F</color>
+    <color name="md_on_primary_container">#6FF7F6</color>
+    <color name="md_secondary">#B0CCCB</color>
+    <color name="md_on_secondary">#1B3534</color>
+    <color name="md_secondary_container">#324B4B</color>
+    <color name="md_on_secondary_container">#CCE8E7</color>
+    <color name="md_tertiary">#B3C8E8</color>
+    <color name="md_on_tertiary">#1C314B</color>
+    <color name="md_tertiary_container">#334863</color>
+    <color name="md_on_tertiary_container">#D3E4FF</color>
+    <color name="md_error">#FFB4AB</color>
+    <color name="md_on_error">#690005</color>
+    <color name="md_error_container">#93000A</color>
+    <color name="md_on_error_container">#FFDAD6</color>
+    <color name="md_surface">#0E1514</color>
+    <color name="md_on_surface">#DEE4E3</color>
+    <color name="md_surface_variant">#3F4948</color>
+    <color name="md_on_surface_variant">#BEC9C8</color>
+    <color name="md_outline">#899392</color>
+    <color name="md_outline_variant">#3F4948</color>
+    <color name="md_inverse_surface">#DEE4E3</color>
+    <color name="md_inverse_on_surface">#2B3231</color>
+    <color name="md_inverse_primary">#006A6A</color>
+    <color name="md_surface_container_lowest">#090F0F</color>
+    <color name="md_surface_container_low">#161D1D</color>
+    <color name="md_surface_container">#1A2121</color>
+    <color name="md_surface_container_high">#252B2B</color>
+    <color name="md_surface_container_highest">#2F3636</color>
+</resources>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/values/colors.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Teal tonal palette (Material 3), light scheme. Dark scheme lives in values-night/colors.xml. -->
+<resources>
+    <color name="md_primary">#006A6A</color>
+    <color name="md_on_primary">#FFFFFF</color>
+    <color name="md_primary_container">#6FF7F6</color>
+    <color name="md_on_primary_container">#002020</color>
+    <color name="md_secondary">#4A6363</color>
+    <color name="md_on_secondary">#FFFFFF</color>
+    <color name="md_secondary_container">#CCE8E7</color>
+    <color name="md_on_secondary_container">#051F1F</color>
+    <color name="md_tertiary">#4B607C</color>
+    <color name="md_on_tertiary">#FFFFFF</color>
+    <color name="md_tertiary_container">#D3E4FF</color>
+    <color name="md_on_tertiary_container">#041C35</color>
+    <color name="md_error">#BA1A1A</color>
+    <color name="md_on_error">#FFFFFF</color>
+    <color name="md_error_container">#FFDAD6</color>
+    <color name="md_on_error_container">#410002</color>
+    <color name="md_surface">#F4FBFA</color>
+    <color name="md_on_surface">#161D1D</color>
+    <color name="md_surface_variant">#DAE5E4</color>
+    <color name="md_on_surface_variant">#3F4948</color>
+    <color name="md_outline">#6F7979</color>
+    <color name="md_outline_variant">#BEC9C8</color>
+    <color name="md_inverse_surface">#2B3231</color>
+    <color name="md_inverse_on_surface">#ECF2F1</color>
+    <color name="md_inverse_primary">#4CDADA</color>
+    <color name="md_surface_container_lowest">#FFFFFF</color>
+    <color name="md_surface_container_low">#EEF5F4</color>
+    <color name="md_surface_container">#E8EFEE</color>
+    <color name="md_surface_container_high">#E3E9E8</color>
+    <color name="md_surface_container_highest">#DDE4E3</color>
+</resources>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/values/strings.xml =====
+<resources>
+    <string name="app_name">Bubble Manager</string>
+    <string name="tagline">Run any app as a floating bubble.</string>
+
+    <string name="section_status">Status</string>
+    <string name="status_shizuku">Shizuku</string>
+    <string name="status_shizuku_off">Not running. Start Shizuku, then come back.</string>
+    <string name="status_shizuku_no_permission">Running. Permission not granted yet.</string>
+    <string name="status_shizuku_ready">Running and authorized</string>
+    <string name="status_overlay">Draw over other apps</string>
+    <string name="status_overlay_off">Not allowed. Tap to open settings.</string>
+    <string name="status_overlay_on">Allowed</string>
+    <string name="status_service">Bubble service</string>
+    <string name="status_service_off">Stopped</string>
+    <string name="status_service_on">Running</string>
+
+    <string name="section_bubbles">Bubbles</string>
+    <string name="action_start">Start service</string>
+    <string name="action_stop">Stop service</string>
+    <string name="action_add">Add app</string>
+    <string name="hint_limit">Up to %1$d bubbles at once. Adding more replaces the oldest.</string>
+
+    <string name="section_diag">Diagnostics</string>
+    <string name="diag_copy">Copy</string>
+    <string name="diag_clear">Clear</string>
+    <string name="diag_empty">No activity yet.</string>
+    <string name="diag_copied">Copied to clipboard</string>
+
+    <string name="toast_overlay_needed">Allow “Draw over other apps”, then try again</string>
+    <string name="toast_shizuku_off">Shizuku is not running</string>
+    <string name="toast_shizuku_denied">Shizuku permission was denied</string>
+    <string name="toast_added">Added %1$s</string>
+
+    <string name="picker_title">Choose an app</string>
+    <string name="picker_search">Search apps</string>
+    <string name="recent_label">Recent</string>
+
+    <string name="notif_channel">Bubble service</string>
+    <string name="notif_title">Bubbles are active</string>
+    <string name="notif_text">Tap to open Bubble Manager</string>
+    <string name="notif_stop">Stop</string>
+
+    <string name="cd_bubble">Bubble for %1$s</string>
+    <string name="cd_drawer">App drawer. Long press to arrange windows</string>
+    <string name="cd_back">Back</string>
+    <string name="cd_minimize">Minimize</string>
+    <string name="cd_close">Close bubble</string>
+    <string name="cd_close_zone">Drop here to close</string>
+</resources>
+
+===== END FILE =====
+
+===== FILE: app/src/main/res/values/themes.xml =====
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.BubbleManager" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/md_primary</item>
+        <item name="colorOnPrimary">@color/md_on_primary</item>
+        <item name="colorPrimaryContainer">@color/md_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/md_on_primary_container</item>
+        <item name="colorSecondary">@color/md_secondary</item>
+        <item name="colorOnSecondary">@color/md_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/md_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/md_on_secondary_container</item>
+        <item name="colorTertiary">@color/md_tertiary</item>
+        <item name="colorOnTertiary">@color/md_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/md_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/md_on_tertiary_container</item>
+        <item name="colorError">@color/md_error</item>
+        <item name="colorOnError">@color/md_on_error</item>
+        <item name="colorErrorContainer">@color/md_error_container</item>
+        <item name="colorOnErrorContainer">@color/md_on_error_container</item>
+        <item name="android:colorBackground">@color/md_surface</item>
+        <item name="colorSurface">@color/md_surface</item>
+        <item name="colorOnSurface">@color/md_on_surface</item>
+        <item name="colorSurfaceVariant">@color/md_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/md_on_surface_variant</item>
+        <item name="colorOutline">@color/md_outline</item>
+        <item name="colorOutlineVariant">@color/md_outline_variant</item>
+        <item name="colorSurfaceInverse">@color/md_inverse_surface</item>
+        <item name="colorOnSurfaceInverse">@color/md_inverse_on_surface</item>
+        <item name="colorPrimaryInverse">@color/md_inverse_primary</item>
+        <item name="colorSurfaceContainerLowest">@color/md_surface_container_lowest</item>
+        <item name="colorSurfaceContainerLow">@color/md_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/md_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/md_surface_container_high</item>
+        <item name="colorSurfaceContainerHighest">@color/md_surface_container_highest</item>
+
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>
+
+===== END FILE =====
+
+===== FILE: app/src/test/java/com/multitask/bubble/BubbleManagerTest.kt =====
+package com.multitask.bubble
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import com.multitask.bubble.core.BubbleManager
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class BubbleManagerTest {
+
+    private val context: Context get() = ApplicationProvider.getApplicationContext()
+
+    @Test
+    fun capEvictsTheOldestBubble() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+        manager.open("app.two")
+        manager.open("app.three")
+        assertEquals(BubbleManager.MAX_BUBBLES, manager.snapshot().size)
+
+        val change = manager.open("app.four")
+
+        assertEquals(listOf("app.one"), change.evicted)
+        val pkgs = manager.snapshot().map { it.pkg }
+        assertFalse(pkgs.contains("app.one"))
+        assertEquals("app.one", manager.recentsSnapshot().first())
+    }
+
+    @Test
+    fun severalBubblesCanBeOpenByDefault() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+
+        val change = manager.open("app.two")
+
+        assertTrue(change.collapsed.isEmpty())
+        assertTrue(manager.snapshot().all { it.expanded })
+    }
+
+    @Test
+    fun singleOpenModeCollapsesTheOthers() {
+        val manager = BubbleManager(context, singleOpen = true) {}
+        manager.open("app.one")
+
+        val change = manager.open("app.two")
+
+        assertEquals(listOf("app.one"), change.collapsed)
+        val state = manager.snapshot().associateBy { it.pkg }
+        assertFalse(state.getValue("app.one").expanded)
+        assertTrue(state.getValue("app.two").expanded)
+    }
+
+    @Test
+    fun openingAnExistingAppDoesNotDuplicateIt() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+        manager.open("app.one")
+        assertEquals(1, manager.snapshot().size)
+    }
+
+    @Test
+    fun collapseKeepsTheBubbleButClosesIt() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+
+        manager.collapse("app.one")
+
+        assertEquals(1, manager.snapshot().size)
+        assertFalse(manager.snapshot().first().expanded)
+    }
+
+    @Test
+    fun dismissedBubblesMoveToRecentsAndReopen() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+        manager.dismiss("app.one")
+        assertTrue(manager.snapshot().isEmpty())
+        assertEquals(listOf("app.one"), manager.recentsSnapshot())
+
+        manager.open("app.one")
+        assertEquals(1, manager.snapshot().size)
+        assertTrue(manager.recentsSnapshot().isEmpty())
+    }
+
+    @Test
+    fun bubblesAreRestoredCollapsedByANewManager() {
+        BubbleManager(context) {}.open("app.one")
+
+        val restored = BubbleManager(context) {}.snapshot()
+
+        assertEquals(listOf("app.one"), restored.map { it.pkg })
+        assertFalse(restored.first().expanded)
+    }
+
+    @Test
+    fun moveToPutsTheBubbleAtTheGivenIndex() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+        manager.open("app.two")
+        manager.open("app.three")
+
+        manager.moveTo("app.three", 0)
+        assertEquals(listOf("app.three", "app.one", "app.two"), manager.snapshot().map { it.pkg })
+
+        manager.moveTo("app.three", 2)
+        assertEquals(listOf("app.one", "app.two", "app.three"), manager.snapshot().map { it.pkg })
+    }
+
+    @Test
+    fun changesNotifyTheListener() {
+        var calls = 0
+        val manager = BubbleManager(context) { calls++ }
+        manager.open("app.one")
+        manager.collapse("app.one")
+        manager.dismiss("app.one")
+        assertEquals(3, calls)
+    }
+}
+
+===== END FILE =====
+
+===== FILE: build.gradle.kts =====
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+plugins {
+  alias(libs.plugins.android.application) apply false
+}
+
+===== END FILE =====
+
+===== FILE: gradle.properties =====
+# Project-wide Gradle settings.
+org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+kotlin.code.style=official
+android.nonTransitiveRClass=true
+org.gradle.caching=true
+org.gradle.configuration-cache=true
+org.gradle.workers.max=4
+# Avoids "Could not connect to Kotlin compile daemon" errors.
+kotlin.compiler.execution.strategy=in-process
+
+===== END FILE =====
+
+===== FILE: gradle/libs.versions.toml =====
+[versions]
+agp = "9.1.1"
+coreKtx = "1.18.0"
+appcompat = "1.7.0"
+material = "1.12.0"
+recyclerview = "1.3.2"
+rikkaShizuku = "13.1.5"
+junit = "4.13.2"
+testCore = "1.6.1"
+robolectric = "4.16.1"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+rikka-shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "rikkaShizuku" }
+rikka-shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "rikkaShizuku" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "testCore" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+
+===== END FILE =====
+
+===== FILE: metadata.json =====
+{
+  "name": "Bubble Manager",
+  "description": "Run any app as a floating bubble on Android 10+. Floating overlay icons with Shizuku-powered freeform windows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
+
+===== END FILE =====
+

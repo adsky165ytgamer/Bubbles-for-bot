@@ -33,7 +33,7 @@
 
     <string name="picker_title">Choose an app</string>
     <string name="picker_search">Search apps</string>
-    <string name="recents_title">Recent bubbles</string>
+    <string name="recent_label">Recent</string>
 
     <string name="notif_channel">Bubble service</string>
     <string name="notif_title">Bubbles are active</string>
@@ -41,10 +41,9 @@
     <string name="notif_stop">Stop</string>
 
     <string name="cd_bubble">Bubble for %1$s</string>
-    <string name="cd_recents">Recent bubbles</string>
+    <string name="cd_drawer">App drawer. Long press to arrange windows</string>
     <string name="cd_back">Back</string>
     <string name="cd_minimize">Minimize</string>
     <string name="cd_close">Close bubble</string>
     <string name="cd_close_zone">Drop here to close</string>
 </resources>
-

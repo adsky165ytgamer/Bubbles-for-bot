@@ -1,39 +1,49 @@
 package com.multitask.bubble.service
 
+import android.animation.ValueAnimator
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
-import android.content.res.ColorStateList
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.PixelFormat
 import android.graphics.Point
+import android.graphics.Rect
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.ContextThemeWrapper
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
+import android.widget.EditText
 import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.color.MaterialColors
 import com.multitask.bubble.MainActivity
 import com.multitask.bubble.R
 import com.multitask.bubble.core.BubbleManager
 import com.multitask.bubble.core.DiagLog
 import com.multitask.bubble.core.ShizukuWindowBackend
+import com.multitask.bubble.ui.AppList
+import com.multitask.bubble.ui.AppListAdapter
 import com.multitask.bubble.ui.BubbleWindow
 import com.multitask.bubble.ui.EmbeddedWindow
 import com.multitask.bubble.ui.FreeformWindow
 import java.util.concurrent.Executors
+import kotlin.concurrent.thread
 import kotlin.math.hypot
 
 class BubbleOverlayService : Service() {
@@ -47,12 +57,15 @@ class BubbleOverlayService : Service() {
         private const val FEATURE_SECONDARY_DISPLAYS = "android.software.activities_on_secondary_displays"
         private const val CHANNEL_ID = "bubble_service"
         private const val NOTIFICATION_ID = 101
+        private const val CHIP_KEY = "__chip__"
+        private const val POSITIONS_PREFS = "bubble_positions"
         private const val BUBBLE_DP = 56
         private const val CLOSE_ZONE_DP = 80
         private const val CLOSE_ZONE_BOTTOM_DP = 96
         private const val CLOSE_HIT_RADIUS_DP = 56
         private const val FIRST_SLOT_TOP_DP = 160
         private const val SLOT_STEP_DP = 64
+        private const val DRAWER_MAX_WIDTH_DP = 360
 
         @Volatile
         var running: Boolean = false
@@ -90,8 +103,8 @@ class BubbleOverlayService : Service() {
     private val ui = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val handles = mutableMapOf<String, BubbleHandle>()
-    private val positions = mutableMapOf<String, Point>()
     private val windows = mutableMapOf<String, BubbleWindow>()
+    private val positions = mutableMapOf<String, Point>()
     private val pendingAdds = mutableListOf<String>()
     private var ready = false
 
@@ -100,12 +113,15 @@ class BubbleOverlayService : Service() {
     private var embeddedBroken = false
     private val embeddedSupported by lazy { packageManager.hasSystemFeature(FEATURE_SECONDARY_DISPLAYS) }
 
+    private var arranging = false
+    private var topWindow: String? = null
     private var chip: BubbleHandle? = null
     private var closeZone: View? = null
-    private var recentsPanel: View? = null
+    private var drawer: View? = null
 
     private val density by lazy { resources.displayMetrics.density }
     private fun dp(value: Int) = (value * density).toInt()
+    private val positionPrefs by lazy { getSharedPreferences(POSITIONS_PREFS, MODE_PRIVATE) }
 
     override fun onCreate() {
         super.onCreate()
@@ -123,7 +139,11 @@ class BubbleOverlayService : Service() {
                 backend.prepare()
                 ui.post {
                     ready = true
-                    DiagLog.log(TAG, if (embeddedSupported) "Mode: embedded bubbles" else "Mode: freeform fallback (no secondary display support)")
+                    DiagLog.log(
+                        TAG,
+                        if (embeddedSupported) "Mode: embedded bubbles"
+                        else "Mode: freeform fallback (no secondary display support)"
+                    )
                     pendingAdds.toList().also { pendingAdds.clear() }.forEach { openBubble(it) }
                 }
             }
@@ -142,11 +162,14 @@ class BubbleOverlayService : Service() {
 
     override fun onDestroy() {
         running = false
-        hideRecents()
-        hideCloseZone()
+        drawer?.let { runCatching { wm.removeView(it) } }
+        drawer = null
+        closeZone?.let { runCatching { wm.removeView(it) } }
+        closeZone = null
         windows.values.forEach { it.release() }
         windows.clear()
-        handles.keys.toList().forEach { removeHandle(it) }
+        handles.values.forEach { runCatching { wm.removeView(it.root) } }
+        handles.clear()
         chip?.let { runCatching { wm.removeView(it.root) } }
         chip = null
         worker.execute { backend.disconnect() } // queued after the force-stops above
@@ -187,7 +210,9 @@ class BubbleOverlayService : Service() {
                 context = themed, wm = wm, backend = backend, worker = worker, pkg = pkg,
                 onMinimize = { minimizeBubble(pkg) },
                 onClose = { closeBubble(pkg) },
-                onFailed = { onEmbeddedFailed(pkg) }
+                onFailed = { onEmbeddedFailed(pkg) },
+                onFocus = { raiseWindow(pkg) },
+                onDragEnd = { x, y -> onWindowDragEnd(pkg, x, y) }
             )
         } else {
             FreeformWindow(this, backend, worker, pkg)
@@ -202,16 +227,20 @@ class BubbleOverlayService : Service() {
         change.evicted.forEach { windows.remove(it)?.release() }
         change.collapsed.forEach { windows[it]?.hide() }
         windows.getOrPut(pkg) { createWindow(pkg) }.show()
+        topWindow = pkg
+        if (arranging) arrangeWindows()
     }
 
     private fun minimizeBubble(pkg: String) {
         manager.collapse(pkg)
         windows[pkg]?.hide()
+        if (arranging) arrangeWindows()
     }
 
     private fun closeBubble(pkg: String) {
         manager.dismiss(pkg)
         windows.remove(pkg)?.release()
+        if (arranging) arrangeWindows()
     }
 
     private fun onBubbleTap(pkg: String) {
@@ -225,6 +254,78 @@ class BubbleOverlayService : Service() {
         ui.postDelayed({
             if (manager.snapshot().any { it.pkg == pkg }) openBubble(pkg)
         }, 400)
+    }
+
+    private fun raiseWindow(pkg: String) {
+        if (topWindow == pkg) return
+        windows[pkg]?.raise()
+        topWindow = pkg
+    }
+
+    // ---- arrange mode: tile the open windows neatly, in bubble order
+
+    private fun openPackages() = manager.snapshot().filter { it.expanded }.map { it.pkg }
+
+    private fun toggleArrange() = setArranging(!arranging)
+
+    private fun setArranging(on: Boolean) {
+        if (on && openPackages().isEmpty()) {
+            DiagLog.log(TAG, "Open at least one window before arranging")
+            return
+        }
+        arranging = on
+        styleChip()
+        DiagLog.log(TAG, if (on) "Arrange mode on. Drag a window to reorder, long press the chip to leave" else "Arrange mode off")
+        if (on) arrangeWindows()
+    }
+
+    private fun arrangeWindows() {
+        val open = openPackages()
+        if (open.isEmpty()) {
+            setArranging(false)
+            return
+        }
+        val slots = slotRects(open.size)
+        open.forEachIndexed { index, pkg -> windows[pkg]?.setBounds(slots[index], animate = true) }
+    }
+
+    /** A dropped window takes the nearest slot and the others shuffle to keep a neat order. */
+    private fun onWindowDragEnd(pkg: String, centerX: Int, centerY: Int) {
+        raiseWindow(pkg)
+        if (!arranging) return
+        val open = openPackages()
+        if (pkg !in open) return
+        val slots = slotRects(open.size)
+        val nearest = slots.indices.minByOrNull { index ->
+            hypot((slots[index].centerX() - centerX).toDouble(), (slots[index].centerY() - centerY).toDouble())
+        } ?: return
+        val targetPkg = open[nearest]
+        if (targetPkg != pkg) {
+            val targetIndex = manager.snapshot().indexOfFirst { it.pkg == targetPkg }
+            manager.moveTo(pkg, targetIndex)
+        }
+        arrangeWindows()
+    }
+
+    /** One window fills the area. Two stack in portrait or sit side by side in landscape. */
+    private fun slotRects(count: Int): List<Rect> {
+        if (count <= 0) return emptyList()
+        val metrics = resources.displayMetrics
+        val gap = dp(8)
+        val area = Rect(gap, dp(36), metrics.widthPixels - dp(BUBBLE_DP) - gap, metrics.heightPixels - dp(24))
+        val portrait = metrics.heightPixels >= metrics.widthPixels
+        val columns = if (count == 1 || (count == 2 && portrait)) 1 else 2
+        val rows = (count + columns - 1) / columns
+        val cellWidth = (area.width() - gap * (columns - 1)) / columns
+        val cellHeight = (area.height() - gap * (rows - 1)) / rows
+        return List(count) { index ->
+            val row = index / columns
+            val column = index % columns
+            val alone = columns > 1 && index == count - 1 && count % columns == 1
+            val left = area.left + column * (cellWidth + gap)
+            val top = area.top + row * (cellHeight + gap)
+            Rect(left, top, left + if (alone) area.width() else cellWidth, top + cellHeight)
+        }
     }
 
     // ---- rendering (main thread only)
@@ -254,7 +355,25 @@ class BubbleOverlayService : Service() {
                 if (bubble.expanded) R.drawable.bg_bubble_active else R.drawable.bg_bubble
             )
         }
-        updateChip(manager.recentsSnapshot().isNotEmpty(), current.size)
+        ensureChip()
+    }
+
+    private fun positionFor(key: String, fallback: Point): Point = positions.getOrPut(key) {
+        val saved = positionPrefs.getString(key, null)?.split(",")
+        val x = saved?.getOrNull(0)?.toIntOrNull()
+        val y = saved?.getOrNull(1)?.toIntOrNull()
+        if (x != null && y != null) clampToScreen(Point(x, y)) else fallback
+    }
+
+    private fun clampToScreen(point: Point): Point {
+        val metrics = resources.displayMetrics
+        val size = dp(BUBBLE_DP)
+        return Point(point.x.coerceIn(0, metrics.widthPixels - size), point.y.coerceIn(0, metrics.heightPixels - size))
+    }
+
+    private fun savePosition(key: String, point: Point) {
+        positions[key] = point
+        positionPrefs.edit().putString(key, "${point.x},${point.y}").apply()
     }
 
     private fun createBubble(pkg: String, index: Int): BubbleHandle? {
@@ -265,12 +384,11 @@ class BubbleOverlayService : Service() {
 
         val size = dp(BUBBLE_DP)
         val screen = resources.displayMetrics
-        val position = positions.getOrPut(pkg) {
-            Point(screen.widthPixels - size, dp(FIRST_SLOT_TOP_DP) + index * dp(SLOT_STEP_DP))
-        }
+        val position = positionFor(pkg, Point(screen.widthPixels - size, dp(FIRST_SLOT_TOP_DP) + index * dp(SLOT_STEP_DP)))
         val params = overlayParams(size, size, position.x, position.y)
-        attachDrag(root, params, pkg)
+        attachDrag(root, params, pkg, closable = true, onTap = { onBubbleTap(pkg) })
         return try {
+            popIn(root)
             wm.addView(root, params)
             BubbleHandle(root, icon, params)
         } catch (e: Exception) {
@@ -280,23 +398,55 @@ class BubbleOverlayService : Service() {
     }
 
     private fun removeHandle(pkg: String) {
-        handles.remove(pkg)?.let { runCatching { wm.removeView(it.root) } }
+        handles.remove(pkg)?.let { popOutAndRemove(it.root) }
         positions.remove(pkg)
+        positionPrefs.edit().remove(pkg).apply()
     }
 
     private fun labelOf(pkg: String): String = runCatching {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     }.getOrDefault(pkg)
 
-    // ---- drag, tap and drop-to-close
+    // ---- animations
 
-    private fun attachDrag(view: View, params: WindowManager.LayoutParams, pkg: String) {
+    private fun popIn(view: View) {
+        view.scaleX = 0f
+        view.scaleY = 0f
+        view.post {
+            view.animate().scaleX(1f).scaleY(1f).setDuration(260)
+                .setInterpolator(OvershootInterpolator(1.4f)).start()
+        }
+    }
+
+    private fun popOutAndRemove(view: View) {
+        view.animate().scaleX(0f).scaleY(0f).alpha(0f).setDuration(160)
+            .withEndAction { runCatching { wm.removeView(view) } }.start()
+    }
+
+    // ---- drag, tap, long press and drop-to-close
+
+    private fun attachDrag(
+        view: View,
+        params: WindowManager.LayoutParams,
+        key: String,
+        closable: Boolean,
+        onTap: () -> Unit,
+        onLongPress: (() -> Unit)? = null
+    ) {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
         var startX = 0
         var startY = 0
         var downX = 0f
         var downY = 0f
         var dragging = false
+        var longPressed = false
+        val longPressCheck = Runnable {
+            if (!dragging) {
+                longPressed = true
+                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                onLongPress?.invoke()
+            }
+        }
 
         view.setOnTouchListener { _, event ->
             when (event.actionMasked) {
@@ -306,39 +456,43 @@ class BubbleOverlayService : Service() {
                     downX = event.rawX
                     downY = event.rawY
                     dragging = false
+                    longPressed = false
+                    if (onLongPress != null) {
+                        ui.postDelayed(longPressCheck, ViewConfiguration.getLongPressTimeout().toLong())
+                    }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - downX
                     val dy = event.rawY - downY
-                    if (!dragging && hypot(dx, dy) > slop) {
+                    if (!dragging && !longPressed && hypot(dx, dy) > slop) {
                         dragging = true
-                        showCloseZone()
+                        ui.removeCallbacks(longPressCheck)
+                        if (closable) showCloseZone()
                     }
                     if (dragging) {
                         params.x = startX + dx.toInt()
                         params.y = startY + dy.toInt()
-                        wm.updateViewLayout(view, params)
-                        setCloseHot(isOverClose(event.rawX, event.rawY))
+                        runCatching { wm.updateViewLayout(view, params) }
+                        if (closable) setCloseHot(isOverClose(event.rawX, event.rawY))
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragging) {
-                        onBubbleTap(pkg)
-                    } else {
-                        val dropped = isOverClose(event.rawX, event.rawY)
-                        hideCloseZone()
-                        if (dropped) {
-                            closeBubble(pkg)
-                        } else {
-                            snapToEdge(view, params)
-                            positions[pkg] = Point(params.x, params.y)
+                    ui.removeCallbacks(longPressCheck)
+                    when {
+                        longPressed -> Unit
+                        !dragging -> onTap()
+                        else -> {
+                            val dropped = closable && isOverClose(event.rawX, event.rawY)
+                            hideCloseZone()
+                            if (dropped) closeBubble(key) else snapToEdge(view, params, key)
                         }
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    ui.removeCallbacks(longPressCheck)
                     hideCloseZone()
                     true
                 }
@@ -347,10 +501,24 @@ class BubbleOverlayService : Service() {
         }
     }
 
-    private fun snapToEdge(view: View, params: WindowManager.LayoutParams) {
-        val width = resources.displayMetrics.widthPixels
-        params.x = if (params.x + params.width / 2 < width / 2) 0 else width - params.width
-        wm.updateViewLayout(view, params)
+    private fun snapToEdge(view: View, params: WindowManager.LayoutParams, key: String) {
+        val screen = resources.displayMetrics
+        val targetX = if (params.x + params.width / 2 < screen.widthPixels / 2) 0 else screen.widthPixels - params.width
+        val targetY = params.y.coerceIn(0, screen.heightPixels - params.height)
+        savePosition(key, Point(targetX, targetY))
+        val fromX = params.x
+        val fromY = params.y
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 180
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                params.x = (fromX + (targetX - fromX) * t).toInt()
+                params.y = (fromY + (targetY - fromY) * t).toInt()
+                runCatching { wm.updateViewLayout(view, params) }
+            }
+            start()
+        }
     }
 
     private fun closeZoneTop(): Int =
@@ -367,8 +535,14 @@ class BubbleOverlayService : Service() {
         val view = LayoutInflater.from(themed).inflate(R.layout.view_close_zone, null)
         val size = dp(CLOSE_ZONE_DP)
         val x = (resources.displayMetrics.widthPixels - size) / 2
+        view.alpha = 0f
+        view.scaleX = 0.6f
+        view.scaleY = 0.6f
         runCatching { wm.addView(view, overlayParams(size, size, x, closeZoneTop())) }
-            .onSuccess { closeZone = view }
+            .onSuccess {
+                closeZone = view
+                view.post { view.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start() }
+            }
     }
 
     private fun setCloseHot(hot: Boolean) {
@@ -388,88 +562,116 @@ class BubbleOverlayService : Service() {
     }
 
     private fun hideCloseZone() {
-        closeZone?.let { runCatching { wm.removeView(it) } }
+        val zone = closeZone ?: return
         closeZone = null
+        zone.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(120)
+            .withEndAction { runCatching { wm.removeView(zone) } }.start()
     }
 
-    // ---- recents chip and panel
+    // ---- chip: movable app drawer button, long press arranges windows
 
-    private fun updateChip(visible: Boolean, bubbleCount: Int) {
-        if (!visible) {
-            hideRecents()
-            chip?.let { runCatching { wm.removeView(it.root) } }
-            chip = null
-            return
-        }
-        val size = dp(BUBBLE_DP)
-        val x = resources.displayMetrics.widthPixels - size
-        val y = dp(FIRST_SLOT_TOP_DP) + bubbleCount * dp(SLOT_STEP_DP)
-
-        chip?.let {
-            it.params.x = x
-            it.params.y = y
-            wm.updateViewLayout(it.root, it.params)
-            return
-        }
+    private fun ensureChip() {
+        if (chip != null) return
         val root = LayoutInflater.from(themed).inflate(R.layout.view_bubble, null)
         val icon = root.findViewById<ImageView>(R.id.bubble_icon)
-        icon.setImageResource(R.drawable.ic_add)
-        icon.setBackgroundResource(R.drawable.bg_chip)
-        icon.imageTintList = ColorStateList.valueOf(
-            MaterialColors.getColor(themed, com.google.android.material.R.attr.colorOnSecondaryContainer, 0)
-        )
-        root.contentDescription = getString(R.string.cd_recents)
-        root.setOnClickListener { if (recentsPanel == null) showRecents() else hideRecents() }
+        icon.setImageResource(R.drawable.ic_apps)
+        root.contentDescription = getString(R.string.cd_drawer)
 
-        val params = overlayParams(size, size, x, y)
-        runCatching { wm.addView(root, params) }.onSuccess { chip = BubbleHandle(root, icon, params) }
+        val size = dp(BUBBLE_DP)
+        val screen = resources.displayMetrics
+        val position = positionFor(
+            CHIP_KEY,
+            Point(screen.widthPixels - size, dp(FIRST_SLOT_TOP_DP) + BubbleManager.MAX_BUBBLES * dp(SLOT_STEP_DP))
+        )
+        val params = overlayParams(size, size, position.x, position.y)
+        attachDrag(
+            root, params, CHIP_KEY, closable = false,
+            onTap = { toggleDrawer() },
+            onLongPress = { toggleArrange() }
+        )
+        try {
+            popIn(root)
+            wm.addView(root, params)
+            chip = BubbleHandle(root, icon, params)
+            styleChip()
+        } catch (e: Exception) {
+            DiagLog.log(TAG, "Could not show the chip: ${e.message}")
+        }
     }
 
-    private fun showRecents() {
-        val recents = manager.recentsSnapshot()
-        val anchor = chip ?: return
-        if (recents.isEmpty()) return
-
-        val inflater = LayoutInflater.from(themed)
-        val panel = inflater.inflate(R.layout.view_recents_panel, null)
-        val list = panel.findViewById<LinearLayout>(R.id.recents_list)
-        recents.forEach { pkg ->
-            val row = inflater.inflate(R.layout.item_app, list, false)
-            row.findViewById<ImageView>(R.id.app_icon)
-                .setImageDrawable(runCatching { packageManager.getApplicationIcon(pkg) }.getOrNull())
-            row.findViewById<TextView>(R.id.app_label).text = labelOf(pkg)
-            row.findViewById<TextView>(R.id.app_package).visibility = View.GONE
-            row.setOnClickListener {
-                hideRecents()
-                openBubble(pkg)
-            }
-            list.addView(row)
+    private fun styleChip() {
+        val icon = chip?.icon ?: return
+        icon.setBackgroundResource(if (arranging) R.drawable.bg_chip_active else R.drawable.bg_chip)
+        val attr = if (arranging) {
+            com.google.android.material.R.attr.colorOnPrimary
+        } else {
+            com.google.android.material.R.attr.colorOnSecondaryContainer
         }
-        panel.setOnTouchListener { _, event ->
+        icon.imageTintList = ColorStateList.valueOf(MaterialColors.getColor(themed, attr, 0))
+    }
+
+    // ---- app drawer (our own overlay, because a service cannot show a bottom sheet)
+
+    private fun toggleDrawer() = if (drawer == null) showDrawer() else hideDrawer()
+
+    private fun showDrawer() {
+        val view = LayoutInflater.from(themed).inflate(R.layout.view_app_drawer, null)
+        val adapter = AppListAdapter { entry ->
+            hideDrawer()
+            openBubble(entry.packageName)
+        }
+        view.findViewById<RecyclerView>(R.id.list).apply {
+            layoutManager = LinearLayoutManager(themed)
+            this.adapter = adapter
+        }
+        view.findViewById<EditText>(R.id.search)
+            .doAfterTextChanged { adapter.filter(it?.toString().orEmpty()) }
+        view.setOnTouchListener { _, event ->
             if (event.action == MotionEvent.ACTION_OUTSIDE) {
-                hideRecents()
+                hideDrawer()
                 true
             } else {
                 false
             }
         }
+
+        val screen = resources.displayMetrics
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            minOf(dp(DRAWER_MAX_WIDTH_DP), (screen.widthPixels * 0.92f).toInt()),
+            (screen.heightPixels * 0.62f).toInt(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            // Focusable so the search field can open the keyboard.
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = dp(BUBBLE_DP + 8)
-            y = anchor.params.y
+            gravity = Gravity.CENTER
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
         }
-        runCatching { wm.addView(panel, params) }.onSuccess { recentsPanel = panel }
+        view.alpha = 0f
+        view.translationY = dp(24).toFloat()
+        try {
+            wm.addView(view, params)
+        } catch (e: Exception) {
+            DiagLog.log(TAG, "Could not open the app drawer: ${e.message}")
+            return
+        }
+        drawer = view
+        view.post {
+            view.animate().alpha(1f).translationY(0f).setDuration(220)
+                .setInterpolator(DecelerateInterpolator()).start()
+        }
+
+        val recents = manager.recentsSnapshot()
+        thread {
+            val apps = AppList.load(this, recents)
+            ui.post { adapter.submit(apps) }
+        }
     }
 
-    private fun hideRecents() {
-        recentsPanel?.let { runCatching { wm.removeView(it) } }
-        recentsPanel = null
+    private fun hideDrawer() {
+        val view = drawer ?: return
+        drawer = null
+        view.animate().alpha(0f).translationY(dp(24).toFloat()).setDuration(160)
+            .withEndAction { runCatching { wm.removeView(view) } }.start()
     }
 }
-

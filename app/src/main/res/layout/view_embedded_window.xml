@@ -73,4 +73,3 @@
             android:layout_height="1dp" />
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>
-

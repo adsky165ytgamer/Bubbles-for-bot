@@ -5,9 +5,13 @@ import android.content.Context
 /**
  * Pure bubble state: the list, the cap, recents and persistence. Main thread only, never blocks.
  * The caller reacts to the returned [Change] (hide or release windows).
+ *
+ * With [singleOpen] true opening a bubble collapses the others, like Android 17. The default lets
+ * several windows stay open so they can be tiled.
  */
 class BubbleManager(
     context: Context,
+    private val singleOpen: Boolean = false,
     private val onChanged: () -> Unit
 ) {
     data class Bubble(val pkg: String, val expanded: Boolean = false)
@@ -50,14 +54,33 @@ class BubbleManager(
             bubbles.add(Bubble(pkg))
             recents.remove(pkg)
         }
-        val collapsed = bubbles.filter { it.expanded && it.pkg != pkg }.map { it.pkg }
-        bubbles.replaceAll { it.copy(expanded = it.pkg == pkg) }
+        val collapsed = if (singleOpen) {
+            bubbles.filter { it.expanded && it.pkg != pkg }.map { it.pkg }
+        } else {
+            emptyList()
+        }
+        bubbles.replaceAll {
+            when {
+                it.pkg == pkg -> it.copy(expanded = true)
+                singleOpen -> it.copy(expanded = false)
+                else -> it
+            }
+        }
         commit()
         return Change(evicted, collapsed)
     }
 
     fun collapse(pkg: String) {
         bubbles.replaceAll { if (it.pkg == pkg) it.copy(expanded = false) else it }
+        commit()
+    }
+
+    /** Moves the bubble so it ends up at [index] in the list. Order decides the tiling order. */
+    fun moveTo(pkg: String, index: Int) {
+        val from = bubbles.indexOfFirst { it.pkg == pkg }
+        if (from < 0) return
+        val item = bubbles.removeAt(from)
+        bubbles.add(index.coerceIn(0, bubbles.size), item)
         commit()
     }
 
@@ -91,4 +114,3 @@ class BubbleManager(
             .take(MAX_RECENTS).forEach { recents.add(it) }
     }
 }
-

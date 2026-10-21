@@ -55,9 +55,35 @@ class ShellService : IShellService.Stub() {
         }
     }
 
-    override fun injectMotion(displayId: Int, action: Int, x: Float, y: Float, downTime: Long): Boolean {
-        val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, x, y, 0)
-        event.source = InputDevice.SOURCE_TOUCHSCREEN
+    /**
+     * Forwards a whole touch frame. [action] is the raw MotionEvent action, so it already carries
+     * the pointer index for POINTER_DOWN/UP. The target app does its own pinch and double-tap
+     * detection from these raw pointers.
+     */
+    override fun injectTouch(
+        displayId: Int, action: Int, downTime: Long,
+        ids: IntArray, xs: FloatArray, ys: FloatArray
+    ): Boolean {
+        val count = ids.size
+        if (count == 0 || xs.size != count || ys.size != count) return false
+        val properties = Array(count) {
+            MotionEvent.PointerProperties().apply {
+                id = ids[it]
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }
+        }
+        val coords = Array(count) {
+            MotionEvent.PointerCoords().apply {
+                x = xs[it]
+                y = ys[it]
+                pressure = 1f
+                size = 1f
+            }
+        }
+        val event = MotionEvent.obtain(
+            downTime, SystemClock.uptimeMillis(), action, count, properties, coords,
+            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0
+        )
         return try {
             inject(event, displayId)
         } finally {
@@ -82,4 +108,3 @@ class ShellService : IShellService.Stub() {
         false
     }
 }
-
