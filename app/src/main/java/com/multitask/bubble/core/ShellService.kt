@@ -80,8 +80,10 @@ class ShellService : IShellService.Stub() {
                 size = 1f
             }
         }
+        val now = SystemClock.uptimeMillis()
+        val actualDownTime = if (downTime > 0) downTime else now
         val event = MotionEvent.obtain(
-            downTime, SystemClock.uptimeMillis(), action, count, properties, coords,
+            actualDownTime, now, action, count, properties, coords,
             0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0
         )
         return try {

@@ -33,7 +33,7 @@ class ShizukuWindowBackend(private val context: Context) : WindowBackend {
     // Bump version() whenever ShellService or its AIDL changes, or Shizuku keeps the old process.
     private val userServiceArgs = Shizuku.UserServiceArgs(
         ComponentName(context.packageName, ShellService::class.java.name)
-    ).daemon(false).processNameSuffix("shell").debuggable(false).version(4)
+    ).daemon(false).processNameSuffix("shell").debuggable(false).version(5)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {

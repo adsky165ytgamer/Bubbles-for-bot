@@ -486,7 +486,19 @@ class BubbleOverlayService : Service() {
                         else -> {
                             val dropped = closable && isOverClose(event.rawX, event.rawY)
                             hideCloseZone()
-                            if (dropped) closeBubble(key) else snapToEdge(view, params, key)
+                            if (dropped) {
+                                closeBubble(key)
+                            } else if (key == CHIP_KEY) {
+                                val screen = resources.displayMetrics
+                                val targetX = params.x.coerceIn(0, screen.widthPixels - params.width)
+                                val targetY = params.y.coerceIn(0, screen.heightPixels - params.height)
+                                savePosition(key, Point(targetX, targetY))
+                                params.x = targetX
+                                params.y = targetY
+                                runCatching { wm.updateViewLayout(view, params) }
+                            } else {
+                                snapToEdge(view, params, key)
+                            }
                         }
                     }
                     true
@@ -626,6 +638,17 @@ class BubbleOverlayService : Service() {
         }
         view.findViewById<EditText>(R.id.search)
             .doAfterTextChanged { adapter.filter(it?.toString().orEmpty()) }
+        view.findViewById<View?>(R.id.btn_close_drawer)?.setOnClickListener { hideDrawer() }
+        view.isFocusableInTouchMode = true
+        view.requestFocus()
+        view.setOnKeyListener { _, keyCode, event ->
+            if (keyCode == android.view.KeyEvent.KEYCODE_BACK && event.action == android.view.KeyEvent.ACTION_UP) {
+                hideDrawer()
+                true
+            } else {
+                false
+            }
+        }
         view.setOnTouchListener { _, event ->
             if (event.action == MotionEvent.ACTION_OUTSIDE) {
                 hideDrawer()

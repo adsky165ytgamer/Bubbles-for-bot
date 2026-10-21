@@ -194,6 +194,9 @@ class EmbeddedWindow(
             alpha = if (animated) 0f else 1f
         }
         attachTitleDrag(view.findViewById(R.id.title_bar), view, params)
+        view.findViewById<View?>(R.id.resize_handle)?.let { handle ->
+            attachResizeHandle(handle, view, params)
+        }
 
         try {
             wm.addView(view, params)
@@ -311,7 +314,7 @@ class EmbeddedWindow(
         val id = displayId
         if (id <= 0) return
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> downTime = SystemClock.uptimeMillis()
+            MotionEvent.ACTION_DOWN -> downTime = if (event.downTime > 0) event.downTime else SystemClock.uptimeMillis()
             MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL,
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> Unit
             else -> return
@@ -321,7 +324,7 @@ class EmbeddedWindow(
         val xs = FloatArray(count) { event.getX(it) }
         val ys = FloatArray(count) { event.getY(it) }
         val action = event.action // keeps the pointer index for POINTER_DOWN/UP
-        val time = downTime
+        val time = if (event.downTime > 0) event.downTime else downTime
         runCatching { input.execute { backend.injectTouch(id, action, time, ids, xs, ys) } }
     }
 
@@ -370,6 +373,68 @@ class EmbeddedWindow(
                     true
                 }
                 else -> true
+            }
+        }
+    }
+
+    private fun attachResizeHandle(handle: View, window: View, params: WindowManager.LayoutParams) {
+        var startX = 0f
+        var startY = 0f
+        var initialWidth = 0
+        var initialHeight = 0
+        var resizing = false
+
+        handle.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = event.rawX
+                    startY = event.rawY
+                    initialWidth = surfaceWidth
+                    initialHeight = surfaceHeight
+                    resizing = true
+                    moveAnimator?.cancel()
+                    handle.alpha = 1.0f
+                    handle.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (resizing) {
+                        val dx = (event.rawX - startX).toInt()
+                        val dy = (event.rawY - startY).toInt()
+                        val screen = metrics
+                        val minW = dp(MIN_SURFACE_DP)
+                        val minH = dp(MIN_SURFACE_DP)
+                        val maxW = (screen.widthPixels - params.x - dp(8)).coerceAtLeast(minW)
+                        val maxH = (screen.heightPixels - params.y - dp(TITLE_DP) - dp(16)).coerceAtLeast(minH)
+
+                        val newW = (initialWidth + dx).coerceIn(minW, maxW)
+                        val newH = (initialHeight + dy).coerceIn(minH, maxH)
+
+                        if (newW != surfaceWidth || newH != surfaceHeight) {
+                            surfaceWidth = newW
+                            surfaceHeight = newH
+                            val surface = window.findViewById<SurfaceView>(R.id.surface)
+                            surface.layoutParams = surface.layoutParams.apply {
+                                width = newW
+                                height = newH
+                            }
+                            virtualDisplay?.resize(newW, newH, metrics.densityDpi)
+                            runCatching { wm.updateViewLayout(window, params) }
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (resizing) {
+                        resizing = false
+                        handle.alpha = 0.75f
+                        virtualDisplay?.resize(surfaceWidth, surfaceHeight, metrics.densityDpi)
+                        runCatching { wm.updateViewLayout(window, params) }
+                        DiagLog.log(TAG, "$pkg resized to ${surfaceWidth}x${surfaceHeight}")
+                    }
+                    true
+                }
+                else -> false
             }
         }
     }
