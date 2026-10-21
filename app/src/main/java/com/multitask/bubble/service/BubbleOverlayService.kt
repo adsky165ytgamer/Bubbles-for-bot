@@ -30,6 +30,9 @@ import com.multitask.bubble.R
 import com.multitask.bubble.core.BubbleManager
 import com.multitask.bubble.core.DiagLog
 import com.multitask.bubble.core.ShizukuWindowBackend
+import com.multitask.bubble.ui.BubbleWindow
+import com.multitask.bubble.ui.EmbeddedWindow
+import com.multitask.bubble.ui.FreeformWindow
 import java.util.concurrent.Executors
 import kotlin.math.hypot
 
@@ -41,6 +44,7 @@ class BubbleOverlayService : Service() {
         const val EXTRA_PKG = "pkg"
 
         private const val TAG = "BubbleService"
+        private const val FEATURE_SECONDARY_DISPLAYS = "android.software.activities_on_secondary_displays"
         private const val CHANNEL_ID = "bubble_service"
         private const val NOTIFICATION_ID = 101
         private const val BUBBLE_DP = 56
@@ -87,8 +91,14 @@ class BubbleOverlayService : Service() {
     private val worker = Executors.newSingleThreadExecutor()
     private val handles = mutableMapOf<String, BubbleHandle>()
     private val positions = mutableMapOf<String, Point>()
+    private val windows = mutableMapOf<String, BubbleWindow>()
     private val pendingAdds = mutableListOf<String>()
     private var ready = false
+
+    // Embedded bubbles need secondary-display support. If the ROM lacks it, or a launch on our
+    // virtual display fails, every bubble falls back to the system's freeform windows.
+    private var embeddedBroken = false
+    private val embeddedSupported by lazy { packageManager.hasSystemFeature(FEATURE_SECONDARY_DISPLAYS) }
 
     private var chip: BubbleHandle? = null
     private var closeZone: View? = null
@@ -103,18 +113,18 @@ class BubbleOverlayService : Service() {
         themed = ContextThemeWrapper(this, R.style.Theme_BubbleManager)
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         backend = ShizukuWindowBackend(applicationContext)
-        manager = BubbleManager(applicationContext, backend) { ui.post { render() } }
+        manager = BubbleManager(applicationContext) { render() }
 
         startAsForeground()
         render() // bubbles restored from the last session show up right away
 
         backend.connect {
             worker.execute {
-                backend.setupFreeform()
+                backend.prepare()
                 ui.post {
                     ready = true
-                    pendingAdds.forEach { pkg -> worker.execute { manager.add(pkg) } }
-                    pendingAdds.clear()
+                    DiagLog.log(TAG, if (embeddedSupported) "Mode: embedded bubbles" else "Mode: freeform fallback (no secondary display support)")
+                    pendingAdds.toList().also { pendingAdds.clear() }.forEach { openBubble(it) }
                 }
             }
         }
@@ -123,9 +133,7 @@ class BubbleOverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopSelf()
-            ACTION_ADD -> intent.getStringExtra(EXTRA_PKG)?.let { pkg ->
-                if (ready) worker.execute { manager.add(pkg) } else pendingAdds.add(pkg)
-            }
+            ACTION_ADD -> intent.getStringExtra(EXTRA_PKG)?.let { openBubble(it) }
         }
         return START_STICKY
     }
@@ -136,11 +144,13 @@ class BubbleOverlayService : Service() {
         running = false
         hideRecents()
         hideCloseZone()
+        windows.values.forEach { it.release() }
+        windows.clear()
         handles.keys.toList().forEach { removeHandle(it) }
         chip?.let { runCatching { wm.removeView(it.root) } }
         chip = null
+        worker.execute { backend.disconnect() } // queued after the force-stops above
         worker.shutdown()
-        backend.disconnect()
         super.onDestroy()
     }
 
@@ -167,6 +177,54 @@ class BubbleOverlayService : Service() {
             .addAction(R.drawable.ic_stop, getString(R.string.notif_stop), stop)
             .build()
         startForeground(NOTIFICATION_ID, notification)
+    }
+
+    // ---- bubble actions (main thread only)
+
+    private fun createWindow(pkg: String): BubbleWindow =
+        if (embeddedSupported && !embeddedBroken) {
+            EmbeddedWindow(
+                context = themed, wm = wm, backend = backend, worker = worker, pkg = pkg,
+                onMinimize = { minimizeBubble(pkg) },
+                onClose = { closeBubble(pkg) },
+                onFailed = { onEmbeddedFailed(pkg) }
+            )
+        } else {
+            FreeformWindow(this, backend, worker, pkg)
+        }
+
+    private fun openBubble(pkg: String) {
+        if (!ready) {
+            if (pkg !in pendingAdds) pendingAdds.add(pkg)
+            return
+        }
+        val change = manager.open(pkg)
+        change.evicted.forEach { windows.remove(it)?.release() }
+        change.collapsed.forEach { windows[it]?.hide() }
+        windows.getOrPut(pkg) { createWindow(pkg) }.show()
+    }
+
+    private fun minimizeBubble(pkg: String) {
+        manager.collapse(pkg)
+        windows[pkg]?.hide()
+    }
+
+    private fun closeBubble(pkg: String) {
+        manager.dismiss(pkg)
+        windows.remove(pkg)?.release()
+    }
+
+    private fun onBubbleTap(pkg: String) {
+        val open = manager.snapshot().firstOrNull { it.pkg == pkg }?.expanded == true
+        if (open) minimizeBubble(pkg) else openBubble(pkg)
+    }
+
+    private fun onEmbeddedFailed(pkg: String) {
+        embeddedBroken = true
+        windows.remove(pkg)?.release()
+        ui.postDelayed({
+            if (manager.snapshot().any { it.pkg == pkg }) openBubble(pkg)
+        }, 400)
     }
 
     // ---- rendering (main thread only)
@@ -267,12 +325,12 @@ class BubbleOverlayService : Service() {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!dragging) {
-                        worker.execute { manager.toggle(pkg) }
+                        onBubbleTap(pkg)
                     } else {
                         val dropped = isOverClose(event.rawX, event.rawY)
                         hideCloseZone()
                         if (dropped) {
-                            worker.execute { manager.dismiss(pkg) }
+                            closeBubble(pkg)
                         } else {
                             snapToEdge(view, params)
                             positions[pkg] = Point(params.x, params.y)
@@ -383,7 +441,7 @@ class BubbleOverlayService : Service() {
             row.findViewById<TextView>(R.id.app_package).visibility = View.GONE
             row.setOnClickListener {
                 hideRecents()
-                worker.execute { manager.add(pkg) }
+                openBubble(pkg)
             }
             list.addView(row)
         }
@@ -414,3 +472,4 @@ class BubbleOverlayService : Service() {
         recentsPanel = null
     }
 }
+

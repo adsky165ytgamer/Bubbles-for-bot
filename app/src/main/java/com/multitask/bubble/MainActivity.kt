@@ -220,3 +220,4 @@ class MainActivity : AppCompatActivity() {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     }.getOrDefault(pkg)
 }
+

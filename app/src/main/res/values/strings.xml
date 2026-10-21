@@ -42,5 +42,9 @@
 
     <string name="cd_bubble">Bubble for %1$s</string>
     <string name="cd_recents">Recent bubbles</string>
+    <string name="cd_back">Back</string>
+    <string name="cd_minimize">Minimize</string>
+    <string name="cd_close">Close bubble</string>
     <string name="cd_close_zone">Drop here to close</string>
 </resources>
+

@@ -1,10 +1,8 @@
 package com.multitask.bubble
 
 import android.content.Context
-import android.graphics.Rect
 import androidx.test.core.app.ApplicationProvider
 import com.multitask.bubble.core.BubbleManager
-import com.multitask.bubble.core.WindowBackend
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,96 +15,87 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class BubbleManagerTest {
 
-    private class FakeWindowBackend : WindowBackend {
-        val launched = mutableListOf<String>()
-        val closed = mutableListOf<String>()
-        val moves = mutableListOf<Pair<Int, Rect>>()
-
-        override fun isReady() = true
-        override fun requestPermission(onResult: (Boolean) -> Unit) = onResult(true)
-        override fun connect(onConnected: () -> Unit) = onConnected()
-        override fun disconnect() {}
-        override fun setupFreeform() {}
-        override fun launch(packageName: String, bounds: Rect): Int {
-            launched.add(packageName)
-            return launched.size
-        }
-        override fun moveTask(taskId: Int, bounds: Rect) {
-            moves.add(taskId to bounds)
-        }
-        override fun close(packageName: String) {
-            closed.add(packageName)
-        }
-    }
-
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
     @Test
     fun capEvictsTheOldestBubble() {
-        val backend = FakeWindowBackend()
-        val manager = BubbleManager(context, backend) {}
-
-        manager.add("app.one")
-        manager.add("app.two")
-        manager.add("app.three")
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+        manager.open("app.two")
+        manager.open("app.three")
         assertEquals(BubbleManager.MAX_BUBBLES, manager.snapshot().size)
 
-        manager.add("app.four")
+        val change = manager.open("app.four")
 
+        assertEquals(listOf("app.one"), change.evicted)
         val pkgs = manager.snapshot().map { it.pkg }
-        assertEquals(BubbleManager.MAX_BUBBLES, pkgs.size)
         assertFalse(pkgs.contains("app.one"))
         assertEquals("app.one", manager.recentsSnapshot().first())
-        assertTrue(backend.closed.contains("app.one"))
     }
 
     @Test
     fun onlyOneBubbleIsOpenAtATime() {
-        val backend = FakeWindowBackend()
-        val manager = BubbleManager(context, backend) {}
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
 
-        manager.add("app.one")
-        manager.add("app.two")
+        val change = manager.open("app.two")
 
+        assertEquals(listOf("app.one"), change.collapsed)
         val state = manager.snapshot().associateBy { it.pkg }
         assertFalse(state.getValue("app.one").expanded)
         assertTrue(state.getValue("app.two").expanded)
-        assertTrue(backend.moves.any { it.first == 1 }) // app.one was moved out of the way
     }
 
     @Test
-    fun addingAnExistingAppDoesNotDuplicateIt() {
-        val manager = BubbleManager(context, FakeWindowBackend()) {}
-
-        manager.add("app.one")
-        manager.add("app.one")
-
+    fun openingAnExistingAppDoesNotDuplicateIt() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
+        manager.open("app.one")
         assertEquals(1, manager.snapshot().size)
     }
 
     @Test
-    fun dismissedBubblesMoveToRecentsAndReopen() {
-        val backend = FakeWindowBackend()
-        val manager = BubbleManager(context, backend) {}
+    fun collapseKeepsTheBubbleButClosesIt() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
 
-        manager.add("app.one")
+        manager.collapse("app.one")
+
+        assertEquals(1, manager.snapshot().size)
+        assertFalse(manager.snapshot().first().expanded)
+    }
+
+    @Test
+    fun dismissedBubblesMoveToRecentsAndReopen() {
+        val manager = BubbleManager(context) {}
+        manager.open("app.one")
         manager.dismiss("app.one")
         assertTrue(manager.snapshot().isEmpty())
         assertEquals(listOf("app.one"), manager.recentsSnapshot())
 
-        manager.add("app.one")
+        manager.open("app.one")
         assertEquals(1, manager.snapshot().size)
         assertTrue(manager.recentsSnapshot().isEmpty())
     }
 
     @Test
     fun bubblesAreRestoredCollapsedByANewManager() {
-        val first = BubbleManager(context, FakeWindowBackend()) {}
-        first.add("app.one")
+        BubbleManager(context) {}.open("app.one")
 
-        val restored = BubbleManager(context, FakeWindowBackend()) {}.snapshot()
+        val restored = BubbleManager(context) {}.snapshot()
 
         assertEquals(listOf("app.one"), restored.map { it.pkg })
         assertFalse(restored.first().expanded)
     }
+
+    @Test
+    fun changesNotifyTheListener() {
+        var calls = 0
+        val manager = BubbleManager(context) { calls++ }
+        manager.open("app.one")
+        manager.collapse("app.one")
+        manager.dismiss("app.one")
+        assertEquals(3, calls)
+    }
 }
+
