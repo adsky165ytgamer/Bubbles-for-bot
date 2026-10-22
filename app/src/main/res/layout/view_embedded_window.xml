@@ -1,92 +1,89 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     style="@style/Widget.Material3.CardView.Elevated"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
-    app:shapeAppearance="@style/ShapeAppearance.Material3.Corner.ExtraLarge">
-
+    app:cardBackgroundColor="?attr/colorSurfaceContainer"
+    app:cardCornerRadius="28dp"
+    app:cardElevation="14dp"
+    app:strokeColor="?attr/colorOutlineVariant"
+    app:strokeWidth="1dp">
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="vertical">
-
         <LinearLayout
             android:id="@+id/title_bar"
             android:layout_width="match_parent"
-            android:layout_height="52dp"
+            android:layout_height="56dp"
+            android:background="?attr/colorSurfaceContainerHigh"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="16dp"
+            android:paddingStart="14dp"
             android:paddingEnd="8dp">
-
             <ImageView
                 android:id="@+id/title_icon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
                 android:importantForAccessibility="no" />
-
             <TextView
                 android:id="@+id/title_text"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="10dp"
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textAppearance="?attr/textAppearanceTitleMedium"
-                android:textColor="?attr/colorOnSurface" />
-
+                android:textColor="?attr/colorOnSurface"
+                android:textStyle="bold" />
             <ImageButton
                 android:id="@+id/btn_back"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/cd_back"
+                android:padding="10dp"
                 android:src="@drawable/ic_back"
                 android:tint="?attr/colorOnSurfaceVariant" />
-
             <ImageButton
                 android:id="@+id/btn_minimize"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/cd_minimize"
+                android:padding="10dp"
                 android:src="@drawable/ic_minimize"
                 android:tint="?attr/colorOnSurfaceVariant" />
-
             <ImageButton
                 android:id="@+id/btn_close"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/cd_close"
+                android:padding="10dp"
                 android:src="@drawable/ic_close"
                 android:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
-
         <FrameLayout
             android:id="@+id/surface_container"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content">
-
             <SurfaceView
                 android:id="@+id/surface"
                 android:layout_width="1dp"
                 android:layout_height="1dp" />
-
             <ImageView
                 android:id="@+id/resize_handle"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
                 android:layout_gravity="bottom|end"
-                android:padding="8dp"
+                android:padding="10dp"
                 android:contentDescription="@string/cd_resize"
                 android:src="@drawable/ic_resize_handle"
-                android:tint="?attr/colorOnSurfaceVariant"
-                android:alpha="0.75" />
+                android:tint="?attr/colorPrimary"
+                android:alpha="0.88" />
         </FrameLayout>
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

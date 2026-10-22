@@ -82,6 +82,7 @@ Bubble Manager employs a dual-mode windowing architecture with automatic capabil
 | **App Drawer Overlay** | **Verified** | Built-in app picker dialog with live search filter, recently used apps pinned to top, and soft keyboard input support (`FLAG_NOT_TOUCH_MODAL`). |
 | **Concurrency Cap (Max 3)** | **Verified** | `BubbleManager.kt` enforces a strict 3-bubble limit to conserve memory and CPU on budget devices (e.g., Redmi A2). |
 | **Diagnostics Console & Dump** | **Verified** | Real-time diagnostics log (`DiagLog`) with in-app Dump button and `dumpsys` activity/display state extraction. |
+| **Material 3 Expressive UI** | **Verified** | Modern indigo/violet expressive palette, hero orbit illustration, elevated cards, and dev_vibe profile badge. |
 
 ---
 
