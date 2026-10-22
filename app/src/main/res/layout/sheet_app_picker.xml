@@ -23,6 +23,7 @@
         android:textAppearance="?attr/textAppearanceHeadlineMedium"
         android:textColor="?attr/colorOnSurface"
         android:textStyle="bold" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -32,27 +33,54 @@
         android:textAppearance="?attr/textAppearanceBodyMedium"
         android:textColor="?attr/colorOnSurfaceVariant" />
 
-    <com.google.android.material.textfield.TextInputLayout
-        style="@style/Widget.Material3.TextInputLayout.FilledBox"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="@string/picker_search"
-        app:boxBackgroundColor="?attr/colorSurfaceContainerHigh"
-        app:boxCornerRadiusBottomEnd="22dp"
-        app:boxCornerRadiusBottomStart="22dp"
-        app:boxCornerRadiusTopEnd="22dp"
-        app:boxCornerRadiusTopStart="22dp"
-        app:boxStrokeWidth="0dp"
-        app:boxStrokeWidthFocused="1dp"
-        app:startIconDrawable="@drawable/ic_apps">
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/search"
-            android:layout_width="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.Material3.TextInputLayout.FilledBox"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:imeOptions="actionSearch"
-            android:inputType="text"
-            android:maxLines="1" />
-    </com.google.android.material.textfield.TextInputLayout>
+            android:layout_weight="1"
+            android:hint="@string/picker_search"
+            app:boxBackgroundColor="?attr/colorSurfaceContainerHigh"
+            app:boxCornerRadiusBottomEnd="22dp"
+            app:boxCornerRadiusBottomStart="22dp"
+            app:boxCornerRadiusTopEnd="22dp"
+            app:boxCornerRadiusTopStart="22dp"
+            app:boxStrokeWidth="0dp"
+            app:boxStrokeWidthFocused="1dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/search"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:imeOptions="actionSearch"
+                android:inputType="text"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:layout_marginStart="8dp"
+            app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="0dp">
+
+            <ImageButton
+                android:id="@+id/btn_view_mode"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="?attr/selectableItemBackground"
+                android:contentDescription="@string/cd_view_mode"
+                android:padding="13dp"
+                android:src="@drawable/ic_apps"
+                android:tint="?attr/colorOnSurface" />
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
 
     <TextView
         android:layout_width="match_parent"
@@ -65,6 +93,7 @@
         android:textAppearance="?attr/textAppearanceLabelMedium"
         android:textColor="?attr/colorPrimary"
         android:textStyle="bold" />
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/list"
         android:layout_width="match_parent"

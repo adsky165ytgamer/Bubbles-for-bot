@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.multitask.bubble.R
 import com.multitask.bubble.databinding.ItemAppBinding
+import com.multitask.bubble.databinding.ItemAppGridBinding
 
 class AppEntry(
     val packageName: String,
@@ -36,13 +37,28 @@ object AppList {
 
 class AppListAdapter(
     private val onClick: (AppEntry) -> Unit
-) : RecyclerView.Adapter<AppListAdapter.Holder>() {
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    class Holder(val binding: ItemAppBinding) : RecyclerView.ViewHolder(binding.root)
+    companion object {
+        const val VIEW_TYPE_LIST = 0
+        const val VIEW_TYPE_GRID = 1
+    }
+
+    class ListHolder(val binding: ItemAppBinding) : RecyclerView.ViewHolder(binding.root)
+    class GridHolder(val binding: ItemAppGridBinding) : RecyclerView.ViewHolder(binding.root)
 
     private var all: List<AppEntry> = emptyList()
     private var shown: List<AppEntry> = emptyList()
     private var query = ""
+    var isGrid: Boolean = false
+        private set
+
+    fun setGridMode(grid: Boolean) {
+        if (isGrid != grid) {
+            isGrid = grid
+            notifyDataSetChanged()
+        }
+    }
 
     fun submit(items: List<AppEntry>) {
         all = items
@@ -55,18 +71,36 @@ class AppListAdapter(
         notifyDataSetChanged()
     }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
-        Holder(ItemAppBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+    override fun getItemViewType(position: Int): Int =
+        if (isGrid) VIEW_TYPE_GRID else VIEW_TYPE_LIST
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        val inflater = LayoutInflater.from(parent.context)
+        return if (viewType == VIEW_TYPE_GRID) {
+            GridHolder(ItemAppGridBinding.inflate(inflater, parent, false))
+        } else {
+            ListHolder(ItemAppBinding.inflate(inflater, parent, false))
+        }
+    }
 
     override fun getItemCount() = shown.size
 
-    override fun onBindViewHolder(holder: Holder, position: Int) {
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val entry = shown[position]
-        val context = holder.binding.root.context
-        holder.binding.appIcon.setImageDrawable(entry.icon)
-        holder.binding.appLabel.text = entry.label
-        holder.binding.appPackage.text =
-            if (entry.recent) context.getString(R.string.recent_label) else entry.packageName
-        holder.binding.root.setOnClickListener { onClick(entry) }
+        val context = holder.itemView.context
+        when (holder) {
+            is ListHolder -> {
+                holder.binding.appIcon.setImageDrawable(entry.icon)
+                holder.binding.appLabel.text = entry.label
+                holder.binding.appPackage.text =
+                    if (entry.recent) context.getString(R.string.recent_label) else entry.packageName
+                holder.binding.root.setOnClickListener { onClick(entry) }
+            }
+            is GridHolder -> {
+                holder.binding.appIcon.setImageDrawable(entry.icon)
+                holder.binding.appLabel.text = entry.label
+                holder.binding.root.setOnClickListener { onClick(entry) }
+            }
+        }
     }
 }

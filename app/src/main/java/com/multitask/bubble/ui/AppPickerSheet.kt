@@ -1,11 +1,14 @@
 package com.multitask.bubble.ui
 
 import android.view.LayoutInflater
+import android.widget.ImageButton
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.doAfterTextChanged
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.multitask.bubble.R
 import com.multitask.bubble.databinding.SheetAppPickerBinding
 import kotlin.concurrent.thread
 
@@ -21,9 +24,19 @@ class AppPickerSheet(
             dialog.dismiss()
             onPick(entry.packageName)
         }
-        binding.list.layoutManager = LinearLayoutManager(activity)
+        val linearLm = LinearLayoutManager(activity)
+        val gridLm = GridLayoutManager(activity, 4)
+        binding.list.layoutManager = linearLm
         binding.list.adapter = adapter
         binding.search.doAfterTextChanged { adapter.filter(it?.toString().orEmpty()) }
+
+        binding.root.findViewById<ImageButton>(R.id.btn_view_mode)?.setOnClickListener { btn ->
+            val nextGrid = !adapter.isGrid
+            adapter.setGridMode(nextGrid)
+            binding.list.layoutManager = if (nextGrid) gridLm else linearLm
+            (btn as ImageButton).setImageResource(if (nextGrid) R.drawable.ic_view_list else R.drawable.ic_apps)
+            btn.contentDescription = activity.getString(if (nextGrid) R.string.view_mode_list else R.string.view_mode_grid)
+        }
 
         dialog.setContentView(binding.root)
         dialog.behavior.skipCollapsed = true

@@ -25,10 +25,12 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.ImageView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.widget.doAfterTextChanged
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.color.MaterialColors
@@ -638,7 +640,7 @@ class BubbleOverlayService : Service() {
         icon.imageTintList = ColorStateList.valueOf(MaterialColors.getColor(themed, attr, 0))
     }
 
-    // ---- app drawer (our own overlay, because a service cannot show a bottom sheet)
+    // ---- app drawer (expands smoothly from the floating chip)
 
     private fun toggleDrawer() = if (drawer == null) showDrawer() else hideDrawer()
 
@@ -648,10 +650,24 @@ class BubbleOverlayService : Service() {
             hideDrawer()
             openBubble(entry.packageName)
         }
-        view.findViewById<RecyclerView>(R.id.list).apply {
-            layoutManager = LinearLayoutManager(themed)
+        val linearLm = LinearLayoutManager(themed)
+        val gridLm = GridLayoutManager(themed, 4)
+        val list = view.findViewById<RecyclerView>(R.id.list)
+        list.apply {
+            layoutManager = linearLm
             this.adapter = adapter
         }
+
+        view.findViewById<ImageButton>(R.id.btn_view_mode)?.let { btn ->
+            btn.setOnClickListener {
+                val nextGrid = !adapter.isGrid
+                adapter.setGridMode(nextGrid)
+                list.layoutManager = if (nextGrid) gridLm else linearLm
+                btn.setImageResource(if (nextGrid) R.drawable.ic_view_list else R.drawable.ic_apps)
+                btn.contentDescription = getString(if (nextGrid) R.string.view_mode_list else R.string.view_mode_grid)
+            }
+        }
+
         view.findViewById<EditText>(R.id.search)
             .doAfterTextChanged { adapter.filter(it?.toString().orEmpty()) }
         view.findViewById<View?>(R.id.btn_close_drawer)?.setOnClickListener { hideDrawer() }
@@ -675,9 +691,11 @@ class BubbleOverlayService : Service() {
         }
 
         val screen = resources.displayMetrics
+        val drawerWidth = minOf(dp(DRAWER_MAX_WIDTH_DP), (screen.widthPixels * 0.92f).toInt())
+        val drawerHeight = (screen.heightPixels * 0.62f).toInt()
         val params = WindowManager.LayoutParams(
-            minOf(dp(DRAWER_MAX_WIDTH_DP), (screen.widthPixels * 0.92f).toInt()),
-            (screen.heightPixels * 0.62f).toInt(),
+            drawerWidth,
+            drawerHeight,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             // Focusable so the search field can open the keyboard.
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
@@ -686,8 +704,21 @@ class BubbleOverlayService : Service() {
             gravity = Gravity.CENTER
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
         }
+
+        val chipHandle = chip
+        val chipCenterX = chipHandle?.let { it.params.x + dp(BUBBLE_DP) / 2 } ?: (screen.widthPixels / 2)
+        val chipCenterY = chipHandle?.let { it.params.y + dp(BUBBLE_DP) / 2 } ?: (screen.heightPixels / 2)
+        val drawerLeft = (screen.widthPixels - drawerWidth) / 2
+        val drawerTop = (screen.heightPixels - drawerHeight) / 2
+        val pivotX = (chipCenterX - drawerLeft).toFloat().coerceIn(0f, drawerWidth.toFloat())
+        val pivotY = (chipCenterY - drawerTop).toFloat().coerceIn(0f, drawerHeight.toFloat())
+
+        view.pivotX = pivotX
+        view.pivotY = pivotY
         view.alpha = 0f
-        view.translationY = dp(24).toFloat()
+        view.scaleX = 0.2f
+        view.scaleY = 0.2f
+
         try {
             wm.addView(view, params)
         } catch (e: Exception) {
@@ -695,8 +726,13 @@ class BubbleOverlayService : Service() {
             return
         }
         drawer = view
+
+        // Smoothly fade/shrink the chip as it expands outward into the drawer
+        chipHandle?.root?.animate()?.scaleX(0f)?.scaleY(0f)?.alpha(0f)?.setDuration(160)
+            ?.withEndAction { chipHandle.root.visibility = View.INVISIBLE }?.start()
+
         view.post {
-            view.animate().alpha(1f).translationY(0f).setDuration(220)
+            view.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(240)
                 .setInterpolator(DecelerateInterpolator()).start()
         }
 
@@ -710,7 +746,16 @@ class BubbleOverlayService : Service() {
     private fun hideDrawer() {
         val view = drawer ?: return
         drawer = null
-        view.animate().alpha(0f).translationY(dp(24).toFloat()).setDuration(160)
-            .withEndAction { runCatching { wm.removeView(view) } }.start()
+        view.animate().alpha(0f).scaleX(0.2f).scaleY(0.2f).setDuration(160)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                runCatching { wm.removeView(view) }
+                // Restore floating chip at its persistent coordinates
+                chip?.let { handle ->
+                    handle.root.visibility = View.VISIBLE
+                    handle.root.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(220)
+                        .setInterpolator(OvershootInterpolator(1.4f)).start()
+                }
+            }.start()
     }
 }

@@ -115,7 +115,12 @@ class MainActivity : AppCompatActivity() {
         binding.rowOverlay.root.setOnClickListener { openOverlaySettings() }
 
         binding.btnStart.setOnClickListener {
-            withReady { withNotificationPermission { BubbleOverlayService.start(this); refreshSoon() } }
+            if (BubbleOverlayService.running) {
+                BubbleOverlayService.stop(this)
+                refreshSoon()
+            } else {
+                withReady { withNotificationPermission { BubbleOverlayService.start(this); refreshSoon() } }
+            }
         }
         binding.btnAdd.setOnClickListener {
             withReady {
@@ -126,9 +131,14 @@ class MainActivity : AppCompatActivity() {
                 }.show()
             }
         }
-        binding.btnStop.setOnClickListener {
-            BubbleOverlayService.stop(this)
-            refreshSoon()
+        binding.btnExport.setOnClickListener {
+            val logText = DiagLog.snapshot()
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Bubble Manager Diagnostics")
+                putExtra(Intent.EXTRA_TEXT, logText.ifBlank { "No diagnostic logs captured yet." })
+            }
+            startActivity(Intent.createChooser(intent, getString(R.string.diag_export)))
         }
         binding.btnCopy.setOnClickListener {
             val text = DiagLog.snapshot()
@@ -172,6 +182,15 @@ class MainActivity : AppCompatActivity() {
             binding.rowService, serviceRunning,
             if (serviceRunning) R.string.status_service_on else R.string.status_service_off
         )
+
+        // Dynamic hero Start/Stop button
+        if (serviceRunning) {
+            binding.btnStart.setText(R.string.action_stop)
+            binding.btnStart.setIconResource(R.drawable.ic_stop)
+        } else {
+            binding.btnStart.setText(R.string.action_start)
+            binding.btnStart.setIconResource(R.drawable.ic_play)
+        }
     }
 
     private fun refreshSoon() {

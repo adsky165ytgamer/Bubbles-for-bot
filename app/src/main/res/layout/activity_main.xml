@@ -64,7 +64,8 @@
 
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="wrap_content"
-                android:layout_height="32dp"
+                android:layout_height="wrap_content"
+                android:minHeight="32dp"
                 app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
                 app:cardCornerRadius="16dp"
                 app:cardElevation="0dp"
@@ -72,10 +73,12 @@
                 app:strokeWidth="1dp">
                 <TextView
                     android:layout_width="wrap_content"
-                    android:layout_height="match_parent"
+                    android:layout_height="wrap_content"
                     android:gravity="center"
                     android:paddingStart="12dp"
+                    android:paddingTop="6dp"
                     android:paddingEnd="12dp"
+                    android:paddingBottom="6dp"
                     android:text="ANDROID 10+"
                     android:textAppearance="?attr/textAppearanceLabelSmall"
                     android:textColor="?attr/colorOnSurfaceVariant"
@@ -140,7 +143,8 @@
                             android:id="@+id/btn_start"
                             style="@style/Widget.Material3.Button"
                             android:layout_width="wrap_content"
-                            android:layout_height="56dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="54dp"
                             android:text="@string/action_start"
                             android:textAppearance="?attr/textAppearanceLabelLarge"
                             app:backgroundTint="?attr/colorOnPrimaryContainer"
@@ -265,22 +269,24 @@
                 android:id="@+id/btn_add"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="58dp"
+                android:layout_height="wrap_content"
+                android:minHeight="54dp"
                 android:layout_marginEnd="6dp"
                 android:layout_weight="1"
                 android:text="@string/action_add"
                 app:cornerRadius="20dp"
                 app:icon="@drawable/ic_add" />
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/btn_stop"
+                android:id="@+id/btn_export"
                 style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="58dp"
+                android:layout_height="wrap_content"
+                android:minHeight="54dp"
                 android:layout_marginStart="6dp"
                 android:layout_weight="1"
-                android:text="@string/action_stop"
+                android:text="@string/action_export_logs"
                 app:cornerRadius="20dp"
-                app:icon="@drawable/ic_stop" />
+                app:icon="@drawable/ic_share" />
         </LinearLayout>
 
         <!-- Diagnostics -->
@@ -363,14 +369,16 @@
                         android:id="@+id/btn_dump"
                         style="@style/Widget.Material3.Button.TextButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="40dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
                         android:minWidth="0dp"
                         android:text="@string/diag_dump" />
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btn_clear"
                         style="@style/Widget.Material3.Button.TextButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="40dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
                         android:minWidth="0dp"
                         android:text="@string/diag_clear" />
                 </LinearLayout>
@@ -391,7 +399,8 @@
                     android:id="@+id/btn_copy"
                     style="@style/Widget.Material3.Button.TonalButton"
                     android:layout_width="match_parent"
-                    android:layout_height="48dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
                     android:layout_marginTop="10dp"
                     android:text="@string/diag_copy"
                     app:cornerRadius="16dp"

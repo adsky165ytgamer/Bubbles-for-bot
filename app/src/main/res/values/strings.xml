@@ -18,12 +18,14 @@
     <string name="action_start">Start service</string>
     <string name="action_stop">Stop service</string>
     <string name="action_add">Add app</string>
+    <string name="action_export_logs">Export logs</string>
     <string name="hint_limit">Up to %1$d bubbles at once. Adding more replaces the oldest.</string>
 
     <string name="section_diag">Diagnostics</string>
     <string name="diag_copy">Copy</string>
     <string name="diag_clear">Clear</string>
     <string name="diag_dump">Dump</string>
+    <string name="diag_export">Share diagnostics</string>
     <string name="diag_empty">No activity yet.</string>
     <string name="diag_copied">Copied to clipboard</string>
 
@@ -35,6 +37,9 @@
     <string name="picker_title">Choose an app</string>
     <string name="picker_search">Search apps</string>
     <string name="recent_label">Recent</string>
+    <string name="view_mode_grid">Switch to grid view</string>
+    <string name="view_mode_list">Switch to list view</string>
+    <string name="cd_view_mode">Toggle view layout</string>
 
     <string name="notif_channel">Bubble service</string>
     <string name="notif_title">Bubbles are active</string>
